@@ -1,0 +1,1635 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>KZQ 控制台</title>
+<script>
+  // 防FOUC: 渲染前定主题 (localStorage > 系统偏好 > 深色)
+  (function () {
+    var t = localStorage.getItem('kzq_theme');
+    if (t !== 'dark' && t !== 'light') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+<script src="vendor/lottie.min.js" defer></script>
+<style>
+/* ---- 双主题变量 (Liquid Glass: 染色/高光边/光泽/投影 全部变量化) ----
+   玻璃配方参考 liquidglassdesign.com: 小半径模糊+saturate, 顶边内阴影高光, 细描边, ::before 光泽 */
+:root {
+  --bg:#0f1115;
+  --bg-glow1:rgba(79,140,255,.34); --bg-glow2:rgba(167,139,250,.26); --bg-glow3:rgba(34,211,238,.22);
+  --surface:rgba(255,255,255,.04);          /* 伪玻璃面板(无blur) */
+  --surface-2:rgba(255,255,255,.075);       /* 伪玻璃控件 */
+  --surface-active:rgba(255,255,255,.16);
+  --glass-bg:rgba(22,26,38,.36);            /* 真玻璃染色层 (低染色 => 透出光斑) */
+  --glass-rim:rgba(255,255,255,.12);        /* 细描边 */
+  --glass-edge:rgba(255,255,255,.16);
+  --glass-gloss:rgba(255,255,255,.13);      /* 顶边高光 (暗色要弱, 否则发白) */
+  --glass-sheen:rgba(255,255,255,.06);      /* 径向光泽 (暗色近无) */
+  --glass-shadow:0 10px 30px rgba(0,0,0,.40);
+  --shine:rgba(255,255,255,.10);            /* 流光边框光色 */
+  --card:#1a1e2a; --card2:rgba(255,255,255,.075); --line:rgba(255,255,255,.10);
+  --line-strong:rgba(255,255,255,.18);   /* 滚轮列内侧线: 比边框线加深一档 */
+  --acc-soft:rgba(79,140,255,.26);       /* 滚轮列触控反馈: 整列淡渐变 (强调色低透明度) */
+  --txt:#e8eaf0; --sub:#9aa3b5; --acc:#4f8cff; --danger:#ff5d5d;
+  --ok:#7ee787; --hint:#39415a;
+  --danger-line:#4a2a2a; --danger-active:#3a2222;
+  --backdrop:rgba(4,6,12,.42);
+  --theme-solid:#181c26;
+  --glass-boost:brightness(1.14);           /* 暗色玻璃提亮透出内容 => 泛光通透 */
+}
+:root[data-theme="light"] {
+  --bg:#e9edf4;
+  --bg-glow1:rgba(79,140,255,.34); --bg-glow2:rgba(167,139,250,.28); --bg-glow3:rgba(14,165,233,.26);
+  --surface:rgba(255,255,255,.44);
+  --surface-2:rgba(255,255,255,.60);
+  --surface-active:rgba(255,255,255,.92);
+  --glass-bg:rgba(255,255,255,.40);
+  --glass-rim:rgba(15,23,42,.10);
+  --glass-edge:rgba(255,255,255,.60);
+  --glass-gloss:rgba(255,255,255,.75);
+  --glass-sheen:rgba(255,255,255,.65);
+  --glass-shadow:0 10px 30px rgba(30,41,59,.14);
+  --shine:rgba(255,255,255,.55);
+  --card:rgba(255,255,255,.50); --card2:rgba(15,23,42,.06); --line:rgba(15,23,42,.10);
+  --line-strong:rgba(15,23,42,.22);      /* 滚轮列内侧线: 比边框线加深一档 */
+  --acc-soft:rgba(59,130,246,.24);       /* 滚轮列触控反馈: 整列淡渐变 (强调色低透明度) */
+  --txt:#1e2433; --sub:#5b6478; --acc:#3b82f6; --danger:#e5484d;
+  --ok:#188038; --hint:#b6bfd0;
+  --danger-line:rgba(229,72,77,.40); --danger-active:rgba(229,72,77,.16);
+  --backdrop:rgba(15,23,42,.28);
+  --theme-solid:#f6f8fc;
+  --glass-boost:brightness(1.04);
+}
+* { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { background:var(--bg); }
+html,body { margin:0; height:100%; }
+/* 氛围光斑底: 玻璃需要透出的东西; 背景静止 => backdrop 重采样开销最低 */
+body::before { content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(62% 46% at 12% 4%, var(--bg-glow1), transparent 72%),
+    radial-gradient(55% 42% at 92% 18%, var(--bg-glow2), transparent 72%),
+    radial-gradient(72% 50% at 50% 100%, var(--bg-glow3), transparent 74%);
+}
+body { color:var(--txt); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  display:flex; flex-direction:column; touch-action:manipulation; user-select:none; -webkit-user-select:none; }
+/* 顶部玻璃条 (真玻璃) + 品牌区: 标题 + 右下角缩小版连接状态 */
+header { position:relative; display:flex; align-items:center; justify-content:space-between;
+  padding:10px 16px; padding-top:calc(10px + env(safe-area-inset-top)); border-bottom:1px solid var(--line);
+  background:var(--glass-bg); overflow:hidden;
+  -webkit-backdrop-filter:blur(6px) saturate(170%) var(--glass-boost); backdrop-filter:blur(6px) saturate(170%) var(--glass-boost);
+  box-shadow: inset 0 1px 0 var(--glass-gloss), inset 0 -1px 0 var(--glass-rim); }
+header::before { content:""; position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(120% 95% at 22% 0%, var(--glass-sheen), transparent 55%); }
+/* Liquid Glass 流光边框: ::after 固定 1px 边框环 (mask xor), conic 光沿环流动
+   (参考 Leonxlnx/liquid-glass shimmer; 角度动画走 @property, 重绘仅 1px 环) */
+@property --shine-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.glass-shine::after { content:""; position:absolute; inset:0; border-radius:inherit; padding:1px; pointer-events:none;
+  background: conic-gradient(from var(--shine-angle, 0deg),
+    transparent 0deg, var(--shine) 28deg, transparent 62deg,
+    transparent 175deg, var(--shine) 208deg, transparent 242deg, transparent 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: shine-spin 16s linear infinite; }
+@keyframes shine-spin { to { --shine-angle: 360deg; } }
+@media (prefers-reduced-motion: reduce) { .glass-shine::after { animation: none; } }
+header > * { position:relative; z-index:1; }
+#brand { display:flex; flex-direction:column; gap:1px; }
+#brand b { font-size:15px; font-weight:600; }
+#conn { font-size:10px; font-weight:500; padding:1px 8px; border-radius:99px;
+  background:var(--surface-2); color:var(--sub); align-self:flex-end; }
+#conn.ok { color:var(--ok); } #conn.bad { color:var(--danger); }
+#btnTheme { width:40px; height:40px; border-radius:14px; padding:0; flex:none;
+  display:flex; align-items:center; justify-content:center; }
+/* Tier 2 折射: 脚本检测到 Chromium 才加 class (@supports 判不了 url() 能否渲染) */
+header.is-refracting {
+  -webkit-backdrop-filter:url(#lg-refract) blur(2px) saturate(170%) var(--glass-boost);
+  backdrop-filter:url(#lg-refract) blur(2px) saturate(170%) var(--glass-boost);
+}
+main { flex:1; display:flex; flex-direction:column; gap:10px; padding:10px;
+  padding-bottom:calc(10px + env(safe-area-inset-bottom)); min-height:0; }
+/* 面板 = 伪玻璃: 半透明表面 + 顶边高光, 不加 blur (控层数) */
+section { background:var(--surface); border:1px solid var(--line); border-radius:14px;
+  box-shadow: inset 0 1px 0 var(--glass-rim); }
+h4 { margin:0; padding:12px 14px 0; font-size:12px; color:var(--sub); font-weight:600; }
+
+/* 输入区（紧凑，置顶）：输入框 + 三按钮行 */
+#keys { padding:10px 12px 12px; position:relative; }
+#textInput { width:100%; height:52px; background:var(--card2); border:none; border-radius:10px; color:var(--txt);
+  padding:8px 10px; font-size:15px; resize:none; outline:none; user-select:text; -webkit-user-select:text; }
+#btnrow { display:flex; gap:8px; margin-top:8px; }
+#btnrow button { flex:1; height:42px; }
+
+/* 触控板（占满剩余高度） */
+#pad { flex:1; min-height:180px; position:relative; touch-action:none; overflow:hidden; }
+#pad .hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  color:var(--hint); font-size:13px; pointer-events:none; text-align:center; }
+
+/* 触控板右缘滚轮: 收起=贴内侧边的三角展开钮(尖朝触控板内侧), 点击或向内拉展开(拉时三角变强调色);
+   滚轮列外侧与触控板边框是同一条线(不另加线), 内侧为加粗加深一档的线条+r角, 无底色遮罩/滑块/轨道线。
+   收起手势=按压内侧线长按350ms武装(整列淡渐变反馈+震动)后向外滑; 轻点/拉拽均不收起(防滚动误触)。
+   列宽=中间按钮(常用键)宽度的 0.6 倍(--wheelW) */
+#padWheel { position:absolute; right:0; top:0; bottom:0; height:auto; width:22px; z-index:4;
+  touch-action:none; cursor:pointer;
+  display:flex; align-items:center; justify-content:flex-end;
+  transition:width .18s ease, background .18s ease; }
+#padWheel .bump { width:18px; height:36px;
+  background:var(--surface-2); border:1px solid var(--line); border-right:none;
+  border-radius:14px 0 0 14px;                           /* 凸起小山坡: 平边贴触控板线, 圆弧向内凸 */
+  box-shadow: inset 0 1px 0 var(--glass-rim);
+  display:flex; align-items:center; justify-content:center;
+  transition:opacity .12s ease, transform .1s ease; }
+#padWheel .chev { width:16px; height:16px; flex:none; }
+#padWheel .chev svg { display:block; width:100%; height:100%; }
+#padWheel.pulling .bump { border-color:var(--acc); }    /* 拉出时山坡描边变强调色 */
+#padWheel .pullline { position:absolute; right:0; top:50%; transform:translateY(-50%);
+  width:2px; height:0; border-radius:2px; background:var(--line-strong); opacity:0;
+  transition:height .15s ease, opacity .15s ease; }      /* 滑动拉出的线条: 随拉距从山坡中心长出 */
+#padWheel.expand { width:var(--wheelW, 26px);
+  border-left:2px solid var(--line-strong);              /* 内侧线: 加粗+加深一档, 外侧仍共用触控板边框线 */
+  border-radius:10px 0 0 10px; }                         /* 内侧 r角: 线条沿弧自然收进上下边 */
+#padWheel.expand .bump, #padWheel.expand .pullline { display:none; }
+#padWheel.expand.arm { background:linear-gradient(to right, var(--acc-soft), transparent); }   /* 武装/提示: 整列淡渐变, 深端贴内侧线 */
+#padWheel.expand .bar { display:none; }
+
+/* 遥控面板 (浮层: 与常用键同款玻璃 + 同高 grid 3×3/44px 按钮, 浮在触控板上方不占满) */
+#remote { position:absolute; top:8px; left:8px; right:8px; background:var(--glass-bg);
+  -webkit-backdrop-filter:blur(10px) saturate(180%) var(--glass-boost); backdrop-filter:blur(10px) saturate(180%) var(--glass-boost);
+  border:1px solid var(--glass-edge); border-radius:6px; padding:12px 0; display:none; z-index:5;
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-gloss), inset 0 0 0 1px var(--glass-rim);
+  overflow:hidden; }
+#remote.show { display:block; }
+#remote .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:0 12px; }
+#remote .grid button { height:44px; font-size:13px; display:flex; align-items:center; justify-content:center; gap:6px; }
+#remote .grid [data-rdir] { font-size:17px; }
+/* 导航状态条: 当前区域 + 当前控件名 + 导航模式 —— 电视遥控的「现在选到哪」
+   信息必须一直可见, 否则用户按方向键时完全不知道焦点在哪 */
+#navStatus { display:flex; align-items:center; gap:8px; margin:0 12px 10px; min-height:24px;
+  font-size:12px; line-height:1.2; }
+#navStatus .nav-chip { flex:none; padding:3px 8px; border-radius:4px; background:rgba(56,165,255,.18);
+  border:1px solid rgba(56,165,255,.45); color:#7cc4ff; font-weight:600; letter-spacing:.4px; }
+#navStatus .nav-dim { background:rgba(255,255,255,.06); border-color:var(--glass-edge); color:inherit; opacity:.75; font-weight:500; }
+#navStatus .nav-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  opacity:.92; }
+#remote .grid.nav-extra { margin-top:8px; grid-template-columns:repeat(4,1fr); }
+#remote .grid.nav-extra button { height:34px; font-size:12px; }
+#remote .grid.nav-extra button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+#btnROK { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+/* 手型图标(拖拽): 内联 SVG 走 currentColor, 深浅主题自动适配 (Lucide hand, ISC) */
+.hand-ico { width:16px; height:16px; flex:none; }
+
+/* 常用键弹出面板 (真玻璃浮层; 同心圆法则: 外框14 - 内距8 = 内圆角6) */
+#keypop { position:absolute; top:8px; left:8px; right:8px; background:var(--glass-bg);
+  -webkit-backdrop-filter:blur(10px) saturate(180%) var(--glass-boost); backdrop-filter:blur(10px) saturate(180%) var(--glass-boost);
+  border:1px solid var(--glass-edge); border-radius:6px; padding:12px 0; display:none; z-index:5;
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-gloss), inset 0 0 0 1px var(--glass-rim);
+  overflow:hidden; }
+#keypop.show { display:block; }
+#keypages { display:flex; width:300%; transition:transform .22s ease; }
+.keypage { width:33.3333%; padding:0 12px; }  /* 页内左右留白; 水平留白放页内才能把后面的页完全裁在边界外 */
+.keypage .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.keypage .grid button { height:44px; font-size:13px; }
+
+/* 底部弹层 (真玻璃, 左右两页翻页: 同常用键的滑动切页模式) */
+#sheetWrap { position:fixed; inset:0; z-index:10; visibility:hidden; transition:visibility 0s linear .22s; }
+#sheetWrap.show { visibility:visible; transition:visibility 0s; }
+#backdrop { position:absolute; inset:0; background:var(--backdrop); opacity:0; transition:opacity .2s; }
+#sheetWrap.show #backdrop { opacity:1; }
+#sheet { position:absolute; left:0; right:0; bottom:0; background:var(--glass-bg);
+  -webkit-backdrop-filter:blur(10px) saturate(180%) var(--glass-boost); backdrop-filter:blur(10px) saturate(180%) var(--glass-boost);
+  border:1px solid var(--glass-edge); border-bottom:none; border-radius:18px 18px 0 0;
+  display:flex; flex-direction:column; max-height:76vh; overflow:hidden;
+  padding-bottom:calc(14px + env(safe-area-inset-bottom));
+  box-shadow: 0 -12px 44px rgba(0,0,0,.35), inset 0 1px 0 var(--glass-gloss), inset 0 0 0 1px var(--glass-rim);
+  transform:translateY(100%); transition:transform .22s ease; }
+#sheetWrap.show #sheet { transform:translateY(0); }
+#sheetHead { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 4px; }
+#sheetHead b { font-size:15px; }
+#sheetDots { display:flex; gap:7px; }
+#sheetDots span { width:7px; height:7px; border-radius:50%; background:var(--line); cursor:pointer; transition:background .2s; }
+#sheetDots span.on { background:var(--acc); }
+#btnClose { width:34px; height:34px; border-radius:10px; }
+#sheetPages { display:flex; width:200%; flex:1; min-height:0; transition:transform .22s ease; touch-action:pan-y; }
+.sheetPage { width:50%; min-width:0; overflow-y:auto; }
+#sheet .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:8px 14px 0; }
+#sheet .grid button { height:46px; font-size:13px; }
+/* 输入框聚焦: 按应用档案列表 (exe+页面标题 一条记录) */
+#focusList { margin:8px 14px 2px; }
+.focus-row { display:flex; align-items:center; gap:8px; padding:7px 10px; border:1px solid var(--line);
+  border-radius:10px; margin-bottom:6px; background:var(--surface-2); }
+.focus-row .nm { flex:1; min-width:0; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.focus-row .nm small { display:block; font-size:10px; color:var(--sub); }
+.focus-row button { flex:none; height:32px; padding:0 12px; font-size:12px; border-radius:8px; }
+.focus-empty { font-size:12px; color:var(--hint); padding:4px 2px; }
+.ico { display:inline-block; width:22px; height:22px; }
+.ico svg { display:block; width:100%; height:100%; }
+.ico-sm .ico { width:16.5px; height:16.5px; }  /* skipBack 画布24(其余32), 补偿到与下一首视觉同大 */
+.has-ico .emo { display:none; }
+#btnrow button, #sheet .grid button { display:flex; align-items:center; justify-content:center; gap:6px; }
+
+button { background:var(--surface-2); color:var(--txt); border:1px solid var(--line); border-radius:10px;
+  font-size:14px; font-weight:500; cursor:pointer; transition:transform .05s, background .15s;
+  box-shadow: inset 0 1px 0 var(--glass-rim); }
+button:active { transform:scale(.94); background:var(--surface-active); }
+button.on { background:var(--acc); border-color:var(--acc); }
+button.danger { color:var(--danger); border-color:var(--danger-line); }
+button.danger:active { background:var(--danger-active); }
+#toast { position:fixed; left:50%; bottom:calc(24px + env(safe-area-inset-bottom)); transform:translateX(-50%);
+  background:var(--glass-bg); color:var(--txt); padding:8px 18px; border-radius:99px; font-size:13px;
+  overflow:hidden;
+  -webkit-backdrop-filter:blur(8px) saturate(160%) var(--glass-boost); backdrop-filter:blur(8px) saturate(160%) var(--glass-boost);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-gloss), inset 0 0 0 1px var(--glass-rim);
+  opacity:0; transition:opacity .2s; pointer-events:none; z-index:99; }
+#toast.show { opacity:1; }
+#textInput::placeholder { color:var(--hint); }
+/* 无障碍回退: 用户偏好压过所有玻璃档位 -> 实色 (Tier 0) */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  header, #keypop, #remote, #sheet, #toast {
+    -webkit-backdrop-filter:none; backdrop-filter:none;
+    background:var(--theme-solid); border-color:var(--line);
+    box-shadow: 0 8px 24px rgba(0,0,0,.2), inset 0 1px 0 var(--glass-rim);
+  }
+  header.is-refracting { -webkit-backdrop-filter:none; backdrop-filter:none; }
+}
+</style>
+</head>
+<body>
+<header class="glass-shine">
+  <div id="brand">
+    <b>KZQ 远程控制</b>
+    <span id="conn">连接中…</span><span id="verTag"></span>
+  </div>
+  <button id="btnTheme" data-anim-dark="moon" data-anim-light="sun" data-mode="toggle" data-on="last" aria-label="切换深浅模式"></button>
+</header>
+<main>
+  <section id="keys">
+    <textarea id="textInput" placeholder="打字/语音实时上屏 · 点文字移动电脑光标 · 空框滑动移光标 · 退格直删电脑文字"></textarea>
+    <div id="btnrow">
+      <button id="btnRemote" data-anim="move" data-mode="toggle" data-on="last" aria-label="遥控模式"><span class="emo">遥控模式</span></button>
+      <button id="btnKeys" data-anim="command" aria-label="常用键"><span class="emo">常用键</span></button>
+      <button id="btnMore" data-anim="alignJustify" aria-label="更多"><span class="emo">☰ 更多</span></button>
+    </div>
+  </section>
+
+  <section id="pad">
+    <div class="hint">触控板：滑动移动 · 点按=左键 · 双指点按=右键 · 双指滑动=滚动</div>
+    <div id="padWheel" aria-label="滚轮">
+      <span class="pullline"></span>
+      <span class="bump"><span class="chev"></span></span>
+    </div>
+    <div id="remote" class="glass-shine">
+      <div id="navStatus" aria-live="polite">
+        <span id="navZone" class="nav-chip">MAIN</span>
+        <span id="navName" class="nav-name">未就绪</span>
+        <span id="navMode" class="nav-chip nav-dim">智能</span>
+      </div>
+      <div class="grid">
+        <button id="btnRBack" aria-label="返回">↩ 返回</button>
+        <button data-rdir="up" aria-label="上">↑</button>
+        <button id="btnDrag" aria-label="拖拽模式"><svg class="hand-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><span class="emo">拖拽</span></button>
+        <button data-rdir="left" aria-label="左">←</button>
+        <button id="btnROK" aria-label="确认">OK</button>
+        <button data-rdir="right" aria-label="右">→</button>
+        <button data-key="backspace" aria-label="退格">⌫ 退格</button>
+        <button data-rdir="down" aria-label="下">↓</button>
+        <button data-key="tab" aria-label="Tab 焦点切换">Tab ⇥</button>
+      </div>
+      <div class="grid nav-extra">
+        <button id="btnZonePrev" aria-label="上一个区域">区域 ◀</button>
+        <button id="btnMode" aria-label="切换导航模式">模式</button>
+        <button id="btnZoneNext" aria-label="下一个区域">区域 ▶</button>
+        <button id="btnFocusBack" aria-label="回到上一个焦点">↩ 焦点</button>
+      </div>
+    </div>
+    <div id="keypop" class="glass-shine">
+      <div id="keypages">
+        <div class="keypage">
+          <div class="grid">
+            <button data-combo="ctrl,a">Ctrl+A 全选</button>
+            <button data-combo="ctrl,c">Ctrl+C 复制</button>
+            <button data-combo="ctrl,v">Ctrl+V 粘贴</button>
+            <button data-combo="ctrl,x">Ctrl+X 剪切</button>
+            <button data-combo="ctrl,z">Ctrl+Z 撤销</button>
+            <button data-combo="ctrl,f">Ctrl+F 查找</button>
+            <button data-key="enter">Enter</button>
+            <button data-key="backspace">⌫ 退格</button>
+            <button data-key="esc">Esc</button>
+          </div>
+        </div>
+        <div class="keypage">
+          <div class="grid">
+            <button data-combo="ctrl,s">Ctrl+S 保存</button>
+            <button data-key="f5">F5 刷新</button>
+            <button data-combo="ctrl,l">Ctrl+L 搜索栏</button>
+            <button data-combo="win,e">Win+E 资源管理器</button>
+            <button data-combo="ctrl,t">Ctrl+T 新标签</button>
+            <button data-combo="ctrl,w">Ctrl+W 关标签</button>
+            <button data-key="tab">Tab</button>
+            <button data-combo="win,d">Win+D 桌面</button>
+            <button data-combo="alt,tab">Alt+Tab</button>
+          </div>
+        </div>
+        <div class="keypage">
+          <div class="grid">
+            <!-- 第三页按使用习惯排布: 方向键反 T(↑上/←↓→行)对应键盘肌肉记忆, Home/End 分列左右(行首/行尾),
+                 使用频率最低的 Del/PgUp/PgDn 沉底; ←/→ 长按加速连发 -->
+            <button data-key="home">Home</button>
+            <button data-key="up">↑</button>
+            <button data-key="end">End</button>
+            <button data-key="left">←</button>
+            <button data-key="down">↓</button>
+            <button data-key="right">→</button>
+            <button data-key="delete">Del</button>
+            <button data-key="pageup">PgUp</button>
+            <button data-key="pagedown">PgDn</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="sheetWrap">
+  <div id="backdrop"></div>
+  <div id="sheet">
+    <div id="sheetHead"><b>更多功能</b><div id="sheetDots"><span class="on"></span><span></span></div><button id="btnClose">✕</button></div>
+    <div id="sheetPages">
+    <div class="sheetPage">
+    <div id="customSec" style="display:none">
+      <h4>自定义</h4>
+      <div class="grid" id="customGrid"></div>
+    </div>
+    <h4>音量 / 媒体</h4>
+    <div class="grid">
+      <!-- 静音: 官网 volume 原味 click-toggle, 全段正放=静音(涟漪发出后收成单波), 倒放=恢复双波 -->
+      <button data-cmd="vol_mute" data-anim="volume" data-mode="toggle" data-on="last" data-off="0"><span class="emo">🔇</span> 静音</button>
+      <!-- pulse: 一次性手势; seg=手势段, rev=1倒放; 音量-正向波纹向内收, 音量+倒放波纹向外放 -->
+      <button data-cmd="vol_down" data-anim="volume" data-mode="pulse" data-seg="0,14"><span class="emo">🔉</span> 音量-</button>
+      <button data-cmd="vol_up" data-anim="volume" data-mode="pulse" data-seg="0,14" data-rev="1"><span class="emo">🔊</span> 音量+</button>
+      <!-- playPause 文件两端: 帧0=⏸ 帧8=▶; 开播倒放▶→⏸, 暂停正放⏸→▶ -->
+      <button data-cmd="media_play" data-anim="playPause" data-mode="toggle" data-on="0" data-off="last"><span class="emo">▶/⏸</span> 播放</button>
+      <button data-cmd="media_next" data-anim="skipForward"><span class="emo">⏭</span> 下一首</button>
+      <button data-cmd="media_prev" data-anim="skipBack" class="ico-sm"><span class="emo">⏮</span> 上一首</button>
+    </div>
+    <h4>显示器</h4>
+    <div class="grid">
+      <button data-cmd="display_internal" data-anim="monitor"><span class="emo">🖥</span> 显示器一</button>
+      <button data-cmd="display_external" data-anim="monitor"><span class="emo">🖥</span> 显示器二</button>
+      <button data-cmd="display_switch" data-anim="refreshCcw"><span class="emo">🔁</span> 切换</button>
+      <button data-cmd="display_clone" data-anim="columns"><span class="emo">⧉</span> 复制</button>
+      <button data-cmd="display_extend" data-anim="maximize2"><span class="emo">⇄</span> 扩展</button>
+      <button data-cmd="display_identify" data-anim="crosshair"><span class="emo">🔢</span> 标识</button>
+    </div>
+    <h4>电源</h4>
+    <div class="grid">
+      <button data-cmd="sleep" data-confirm="确认让电脑睡眠？" data-anim="moon"><span class="emo">🌙</span> 睡眠</button>
+      <button data-cmd="lock" data-anim="lock"><span class="emo">🔒</span> 锁屏</button>
+      <button data-cmd="monitor_off" data-anim="monitor"><span class="emo">🖥</span> 关屏幕</button>
+    </div>
+    <div class="grid">
+      <button class="danger" data-cmd="shutdown" data-confirm="确认 5 秒后关机？" data-anim="power"><span class="emo">⏻</span> 关机</button>
+      <span></span>
+      <button class="danger" data-cmd="restart" data-confirm="确认 5 秒后重启？" data-anim="rotateCw"><span class="emo">↻</span> 重启</button>
+    </div>
+    </div>
+    <div class="sheetPage">
+    <h4>输入框聚焦</h4>
+    <div class="grid">
+      <button id="btnLearn" aria-label="记录输入框位置"><span class="emo">📍 记录位置</span></button>
+    </div>
+    <div id="focusList"></div>
+    <h4>键盘联动</h4>
+    <div class="grid">
+      <button id="btnKbLink" aria-label="触控板点按联动手机键盘"><span class="emo">⌨ 点按联动</span></button>
+    </div>
+    <div class="focus-empty" style="margin:0 14px 6px">开启后触控板「点按」时电脑识别落点：是输入框则手机自动弹键盘，非输入框不弹。</div>
+    </div>
+    </div>
+  </div>
+</div>
+<div id="toast" class="glass-shine"></div>
+<!-- Liquid Glass 折射+色差滤镜 (仅 Chromium 渲染; 贴图由 JS 按元素尺寸生成)
+     色差做法参考 Leonxlnx/liquid-glass: 三通道位移量递减(R>G>B) -> 单通道提取 -> screen 合成 -> 轻微软化;
+     贴图中心平坦(SDF 平方衰减), 中心三通道位移均≈0, 无需边缘 mask 保中心 -->
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <filter id="lg-refract" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+    <feImage id="lg-map" x="0" y="0" width="0" height="0" preserveAspectRatio="none" result="map"/>
+    <feDisplacementMap in="SourceGraphic" in2="map" scale="31" xChannelSelector="R" yChannelSelector="G" result="dR"/>
+    <feColorMatrix in="dR" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="chR"/>
+    <feDisplacementMap in="SourceGraphic" in2="map" scale="28" xChannelSelector="R" yChannelSelector="G" result="dG"/>
+    <feColorMatrix in="dG" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="chG"/>
+    <feDisplacementMap in="SourceGraphic" in2="map" scale="25" xChannelSelector="R" yChannelSelector="G" result="dB"/>
+    <feColorMatrix in="dB" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="chB"/>
+    <feBlend in="chG" in2="chB" mode="screen" result="gb"/>
+    <feBlend in="chR" in2="gb" mode="screen"/>
+    <feGaussianBlur stdDeviation="0.3"/>
+  </filter>
+</svg>
+
+<script>
+const $ = s => document.querySelector(s);
+const conn = $('#conn');
+const setConn = (t, bad) => { conn.textContent = t; conn.className = bad ? 'bad' : 'ok'; };
+
+// ---- token ----
+const token = new URLSearchParams(location.search).get('t') || localStorage.getItem('kzq_token') || '';
+if (token) localStorage.setItem('kzq_token', token);
+
+async function api(path, data) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Token': token },
+    body: JSON.stringify(data || {})
+  });
+  if (r.status === 403) { setConn('Token 无效，请重新扫码', true); throw new Error('token'); }
+  const j = await r.json().catch(() => ({ ok: false, error: '响应异常' }));
+  if (j.ok === false) setConn('错误: ' + (j.error || '未知'), true);
+  return j;
+}
+
+let toastTimer;
+function toast(t) {
+  const el = $('#toast');
+  el.textContent = t; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 1600);
+}
+
+// ---- 触控板 ----
+const pad = $('#pad');
+const pointers = new Map();
+let moveAcc = { dx: 0, dy: 0 }, scrollAcc = 0, flushTimer = null, remoteMode = false, dragMode = false, gesture = null;
+
+function scheduleFlush() { if (!flushTimer) flushTimer = setTimeout(flush, 40); }
+function flush() {
+  flushTimer = null;
+  if (moveAcc.dx || moveAcc.dy) {
+    api('/api/mouse', { move: [Math.round(moveAcc.dx), Math.round(moveAcc.dy)] });
+    moveAcc = { dx: 0, dy: 0 };
+  }
+  if (scrollAcc) {
+    const n = Math.round(scrollAcc / 15);
+    if (n) api('/api/mouse', { scroll: -n });
+    scrollAcc -= n * 15;      // 保留不足一格的余量: 慢速拖动不丢行程 (旧行为直接清零 => 滚轮只动一点)
+  }
+}
+
+pad.addEventListener('pointerdown', e => {
+  pad.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), moved: 0 });
+  if (pointers.size === 1) gesture = { quick: true, two: false };
+  if (pointers.size === 2) gesture.two = true;
+  if (dragMode && pointers.size === 1) api('/api/mouse', { drag: 'down' });
+});
+pad.addEventListener('pointermove', e => {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  p.moved += Math.abs(dx) + Math.abs(dy);
+  if (p.moved > 12) gesture && (gesture.quick = false);
+  if (pointers.size >= 2) scrollAcc += dy;
+  else { moveAcc.dx += dx; moveAcc.dy += dy; }
+  scheduleFlush();
+});
+function padUp(e) {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  pointers.delete(e.pointerId);
+  if (dragMode) { if (pointers.size === 0) api('/api/mouse', { drag: 'up' }); return; }
+  if (performance.now() - p.t < 300 && p.moved < 12) { /* 保持 gesture.quick */ }
+  else gesture && (gesture.quick = false);
+  if (pointers.size === 0) {
+    flush();
+    if (gesture && gesture.quick) {
+      const need_check = kbLink && !gesture.two && !dragMode;   // 联动: 点按后由服务端判定落点是否输入框 (拖拽模式不触发)
+      api('/api/mouse', { click: gesture.two ? 'right' : 'left', check: need_check })
+        .then(j => {
+          if (need_check && j.ok && j.msg && j.msg.indexOf('input:') === 0) {
+            kbSuppress = true;
+            textEl.focus();    // 点击落在输入框上: 手机键盘弹出(不走档案/位置回放)
+            kbSuppress = false;
+            toast('键盘已弹出：' + j.msg.slice(7));
+            // 读回整框: 点击落点的输入框全文进镜像, 光标留在用户点击处(TextPattern 读得到就不动它)
+            flushIns();
+            const snap = opCount, gen = caretGen, selectionSnap = selGen;
+            writeChain = writeChain
+              .then(() => api('/api/cmd', { cmd: 'focus_read' }))
+              .then(j2 => {
+                if (opCount !== snap || caretGen !== gen || selGen !== selectionSnap || pendingIns || queuedOps) return;
+                applyReadback(j2);
+              })
+              .catch(() => { });
+          }
+        });
+    }
+    gesture = null;
+  }
+}
+pad.addEventListener('pointerup', padUp);
+pad.addEventListener('pointercancel', padUp);
+pad.addEventListener('contextmenu', e => e.preventDefault());   // 拖拽长按停顿不弹系统菜单(防 pointercancel 拖断)
+
+// ---- 触控板右缘滚轮: 小山坡展开钮 + useanimations chevron ----
+// 收起=贴触控板内侧边的凸起小山坡(平边贴线, 内嵌 chevron Lottie), 轻点或向内拉展开;
+// 拉动时手指即播放头: 拉距进度 scrub chevron 帧(0-25) + 线条从山坡中心长出 + 山坡向内位移;
+// 展开=集成在触控板内的滚动列(外侧与触控板边框同一条线, 内侧线加粗加深+r角)。
+// 收起手势=按压内侧线长按350ms武装(整列淡渐变, 深端贴内侧线)后向外滑; 轻点/拉拽不收起(防误触)。
+// 列宽=中间按钮(常用键)宽度的 0.6 倍; 滚动复用 scrollAcc/flush 通道并带灵敏度增益
+const padWheel = $('#padWheel');
+const wheelBump = padWheel.querySelector('.bump');
+const wheelChevBox = padWheel.querySelector('.chev');
+const wheelPullLine = padWheel.querySelector('.pullline');
+const PULL_OPEN = 26;                                        // 向内拉展开 / 武装后向外拉收起的阈值
+const PULL_LINE_MAX = 180;                                   // 拉出线条的最大长度(px)
+const WHEEL_GAIN = 12;                                       // 滚轮列灵敏度: 每像素滚动量倍率(双指滑动为 1)
+const WHEEL_ARM_MS = 350;                                    // 长按武装的延时
+let wheelOn = false, wheelX = 0, wheelY = 0, wheelMoved = 0, wheelPull = 0;
+let wheelArm = false, wheelArmTimer = null, wheelChev = null;
+function sizeWheel() {                                       // 列宽跟随布局: 中间按钮宽度的 0.6 倍(在半宽规格上加宽一档)
+  const mid = document.querySelectorAll('#btnrow button')[1];
+  if (mid) padWheel.style.setProperty('--wheelW', Math.max(24, mid.offsetWidth * 0.6) + 'px');
+}
+sizeWheel();
+window.addEventListener('resize', sizeWheel);
+function wheelBuzz(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) { } }
+// chevron Lottie (useanimations chevronLeft): 手指即播放头, 拉距进度直接 scrub 帧 0-25
+async function mountWheelChev() {
+  if (wheelChev || !window.lottie || !wheelChevBox) return;
+  try {
+    const r = await fetch('anims/chevronLeft.json');
+    if (!r.ok) throw 0;
+    const data = await r.json();
+    recolorLottie(data);
+    wheelChev = lottie.loadAnimation({ container: wheelChevBox, renderer: 'svg', loop: false, autoplay: false, animationData: data });
+    wheelChev.goToAndStop(0, true);
+  } catch (e) {
+    // lottie 不可用: 静态 SVG 箭头兜底
+    wheelChevBox.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>';
+  }
+}
+document.addEventListener('DOMContentLoaded', mountWheelChev);
+if (document.readyState !== 'loading') mountWheelChev();
+function wheelScrub() {                                      // 拉距 -> 动画帧 + 线条长度 + 山坡位移, 一处同步
+  const prog = Math.min(wheelPull / PULL_OPEN, 1);
+  wheelBump.style.transform = 'translateX(' + (-Math.min(wheelPull, 12)) + 'px)';
+  wheelPullLine.style.height = Math.round(prog * PULL_LINE_MAX) + 'px';
+  wheelPullLine.style.opacity = prog > 0.04 ? 1 : 0;
+  if (wheelChev && !REDUCED.matches) wheelChev.goToAndStop(prog * 25, true);
+}
+function wheelReset() {
+  wheelPull = 0; wheelArm = false; padWheel.classList.remove('arm');
+  wheelBump.style.transform = '';
+  wheelPullLine.style.height = '0px'; wheelPullLine.style.opacity = '0';
+  if (wheelChev) wheelChev.goToAndStop(0, true);
+}
+function wheelNudge() {                                      // 展开态轻拍: 整列淡渐变提示 + 教育文案, 不收起
+  padWheel.classList.add('arm');
+  wheelBuzz(8);
+  toast('长按滚轮后向外滑收起');
+  setTimeout(() => { if (!wheelArm) padWheel.classList.remove('arm'); }, 180);
+}
+padWheel.addEventListener('pointerdown', e => {
+  e.stopPropagation();                                       // 滚轮不算触控板手势
+  padWheel.setPointerCapture(e.pointerId);
+  wheelOn = true; wheelX = e.clientX; wheelY = e.clientY; wheelMoved = 0; wheelPull = 0;
+  if (padWheel.classList.contains('expand')) {               // 展开态: 静止长按 350ms 武装收起手势
+    wheelArm = false;
+    wheelArmTimer = setTimeout(() => {
+      if (wheelOn && wheelMoved < 8) {
+        wheelArm = true;
+        padWheel.classList.add('arm');                       // 触控反馈: 整列淡渐变 + 震动
+        wheelBuzz(12);
+      }
+    }, WHEEL_ARM_MS);
+  }
+});
+padWheel.addEventListener('pointermove', e => {
+  if (!wheelOn) return;
+  const dx = e.clientX - wheelX, dy = e.clientY - wheelY;
+  wheelX = e.clientX; wheelY = e.clientY;
+  wheelMoved += Math.abs(dx) + Math.abs(dy);
+  if (!padWheel.classList.contains('expand')) {
+    wheelPull = Math.max(0, wheelPull - dx);                 // 向内(左)拉累计, 向右回退
+    if (wheelPull > 2) padWheel.classList.add('pulling'); else padWheel.classList.remove('pulling');
+    wheelScrub();                                            // 手指即播放头: 山坡位移 + chevron scrub + 线条生长
+    if (wheelPull > PULL_OPEN) { padWheel.classList.remove('pulling'); padWheel.classList.add('expand'); wheelReset(); wheelBuzz(10); }
+  } else {
+    if (!wheelArm && wheelMoved > 8) clearTimeout(wheelArmTimer);   // 已在拖动: 不再武装, 纯滚动
+    wheelPull = wheelArm ? Math.max(0, wheelPull + dx) : 0;  // 只有武装后才累计向外拉; 滚动横移抖动不收起
+    if (dy) {
+      scrollAcc += dy * WHEEL_GAIN;                          // 与双指滑动同一条滚动通道, 带增益
+      scheduleFlush();
+    }
+    if (wheelPull > PULL_OPEN) { padWheel.classList.remove('expand'); wheelReset(); wheelBuzz(20); }
+  }
+});
+function wheelEnd() {
+  if (!wheelOn) return;
+  wheelOn = false;
+  clearTimeout(wheelArmTimer);
+  padWheel.classList.remove('pulling');
+  wheelPull = 0;
+  const tap = wheelMoved < 8;
+  if (!padWheel.classList.contains('expand')) {
+    wheelReset();                                            // 回弹: 山坡归位 + chevron 倒回 + 线条缩回
+    if (tap) { padWheel.classList.add('expand'); wheelReset(); wheelBuzz(10); }   // 轻点 = 展开
+  } else {
+    wheelReset();                                            // 松手一律只解除武装; 收起只发生在武装后向外滑
+    if (tap) wheelNudge();
+  }
+  wheelArm = false;
+}
+padWheel.addEventListener('pointerup', wheelEnd);
+padWheel.addEventListener('pointercancel', wheelEnd);
+padWheel.addEventListener('contextmenu', e => e.preventDefault());   // 长按不弹系统菜单
+
+// ---- 遥控模式: 手机当电视遥控器, 方向键在电脑上做空间焦点导航 ----
+// 与「常用键」同款浮层(不占满触控板, 触控板手势保留); 电脑端按元素坐标算
+// 上/下/左/右的下一个焦点(WICG Spatial Navigation), 高亮边框实时跟随;
+// OK 激活, 返回 = Esc。开启即电脑端出高亮, 关闭浮层即收。
+const btnRemote = $('#btnRemote'), remotePanel = $('#remote');
+function closeRemote(silent) {
+  if (!remoteMode) return;
+  remoteMode = false;
+  btnRemote.classList.remove('on');
+  playToggle(btnRemote, false);
+  remotePanel.classList.remove('show');
+  if (!silent) api('/api/cmd', { cmd: 'remote_off' }).catch(() => { });
+}
+btnRemote.onclick = async () => {
+  const next = !remoteMode;
+  remoteMode = next;                                  // 乐观更新 UI, 服务端失败再回滚
+  btnRemote.classList.toggle('on', next);
+  playToggle(btnRemote, next);
+  remotePanel.classList.toggle('show', next);
+  if (next) keypop.classList.remove('show');          // 与常用键互斥
+  // 不再调 remote_on: 面板只是开关, 首次按操控按钮时服务端自动锁定当前窗口(懒激活)
+  if (!next) {
+    let ok = false;
+    try {
+      const j = await api('/api/cmd', { cmd: 'remote_off' });
+      if (j.ok) { toast(j.msg || '遥控模式关'); ok = true; }
+    } catch (e) { }
+    if (!ok) toast('遥控模式关闭失败，请重试');
+  }
+};
+// 阻断指针事件冒泡: 点遥控面板不能被当成触控板手势
+['pointerdown', 'pointermove', 'pointerup', 'pointercancel'].forEach(ev =>
+  remotePanel.addEventListener(ev, e => e.stopPropagation()));
+
+// ---- 导航状态栏: 区域 / 当前控件 / 模式 ----
+// 服务端 /api/remote 返回 dict(engine/mode/zone/label/dialog/editing...),
+// 每次操作后刷新; 这样用户按方向键时一直能看到"现在选到哪、在哪个区"
+const navZoneEl = $('#navZone'), navNameEl = $('#navName'), navModeEl = $('#navMode');
+const btnMode = $('#btnMode');
+const MODE_LABEL = { smart: '智能', zone: '区域', free: '自由' };
+function renderNav(j) {
+  if (!j || typeof j !== 'object') return;
+  if (j.zone) navZoneEl.textContent = j.dialog ? 'DIALOG' : j.zone;
+  if (typeof j.label === 'string') navNameEl.textContent = j.label || '未就绪';
+  if (j.mode) {
+    navModeEl.textContent = MODE_LABEL[j.mode] || j.mode;
+    btnMode.classList.toggle('on', j.mode !== 'smart');
+  }
+  if (j.engine) navZoneEl.dataset.engine = j.engine;
+}
+async function remoteCall(payload) {
+  try {
+    const j = await api('/api/remote', payload);
+    renderNav(j);
+    if (j && j.msg) toast(j.msg);
+    return j;
+  } catch (e) {
+    return null;
+  }
+}
+$('#btnZonePrev').onclick = () => remoteCall({ dir: 'zone_prev' });
+$('#btnZoneNext').onclick = () => remoteCall({ dir: 'zone_next' });
+$('#btnFocusBack').onclick = () => remoteCall({ dir: 'focus_back' });
+btnMode.onclick = () => remoteCall({ dir: 'mode' });
+// 点面板外关闭(同常用键), 同步关掉电脑端追踪; 触控板上的点击是「操作电脑」,
+// 拖拽进行中的点击也是——都不退出遥控
+document.addEventListener('click', e => {
+  if (!remotePanel.classList.contains('show')) return;
+  if (remotePanel.contains(e.target) || e.target.closest('#keys')) return;
+  if (e.target.closest('#pad') || dragMode) return;
+  closeRemote(false);
+});
+// D-Pad 方向键: 短按=智能模式(文本区内移光标/其他元素空间导航),
+// 长按连发(500ms 起跳, 200ms 步进)=强制空间导航连跳(在文本区里也能往外跳)
+document.querySelectorAll('#remote [data-rdir]').forEach(b => {
+  const dir = b.dataset.rdir;
+  let timer = null;
+  const send = (force) => remoteCall(force ? { dir, force: 1 } : { dir });
+  b.addEventListener('pointerdown', () => {
+    send(false);
+    clearTimeout(timer);
+    timer = setTimeout(function tick() { send(true); timer = setTimeout(tick, 200); }, 500);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+    b.addEventListener(ev, () => clearTimeout(timer)));
+  b.addEventListener('contextmenu', e => e.preventDefault());   // 长按不弹系统菜单
+});
+// 返回键: 短按=Esc; 长按 0.6s=Ctrl+Tab 切换浏览器标签
+const btnRBack = $('#btnRBack');
+let backTimer = null, backLong = false;
+btnRBack.addEventListener('pointerdown', () => {
+  backLong = false;
+  backTimer = setTimeout(() => {
+    backLong = true;
+    api('/api/key', { combo: ['ctrl', 'tab'] }).then(() => toast('已切换标签')).catch(() => { });
+  }, 600);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+  btnRBack.addEventListener(ev, () => clearTimeout(backTimer)));
+btnRBack.onclick = () => {
+  if (backLong) { backLong = false; return; }   // 长按已切标签, 不再发 Esc
+  remoteCall({ dir: 'back' });
+};
+// OK 键: 短按=激活当前元素; 长按 0.6s=Alt+Tab 切换应用
+const btnOK = $('#btnROK');
+let okTimer = null, okLong = false;
+btnOK.addEventListener('pointerdown', () => {
+  okLong = false;
+  okTimer = setTimeout(() => {
+    okLong = true;
+    api('/api/key', { combo: ['alt', 'tab'] }).then(() => toast('已切换应用')).catch(() => { });
+  }, 600);
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+  btnOK.addEventListener(ev, () => clearTimeout(okTimer)));
+btnOK.onclick = () => {
+  if (okLong) { okLong = false; return; }   // 长按已切应用, 不再发激活
+  remoteCall({ dir: 'ok' });
+};
+// 拖拽模式(遥控面板内): 开启后触控板「按下即拖动」, 与遥控焦点导航互不干扰
+// (面板浮层不收起; 点按联动不触发)
+const btnDrag = $('#btnDrag');
+btnDrag.onclick = () => {
+  dragMode = !dragMode;
+  btnDrag.classList.toggle('on', dragMode);
+  playToggle(btnDrag, dragMode);
+  if (dragMode) textEl.blur();   // 拖拽要用触控板, 收起手机键盘
+  toast(dragMode ? '拖拽模式开：触控板按下即拖动' : '拖拽模式关');
+};
+
+// ---- 📍 记录输入框位置 (两段式) + 按应用档案列表 ----
+// 每条档案绑定一个目标 (exe + 窗口类名 + 页面标题), 同一目标重学即覆盖
+let learnArm = false;
+const btnLearn = $('#btnLearn');
+function armLearn() {
+  if (learnArm) return;
+  learnArm = true;
+  btnLearn.classList.add('on');
+  toast('学习开：用触控板点击目标应用的输入框，再按一次「📍 记录位置」确认');
+}
+btnLearn.onclick = async () => {
+  if (!learnArm) { armLearn(); return; }
+  learnArm = false;
+  btnLearn.classList.remove('on');
+  const j = await api('/api/cmd', { cmd: 'focus_learn', name: lastCustom });
+  toast(j.ok ? (j.msg || '已记录输入框') : ('记录失败: ' + (j.error || '未知')));
+  renderFocusList();
+};
+const escapeHtml = s => String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+async function renderFocusList() {
+  const el = $('#focusList');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/focus_profiles?t=' + encodeURIComponent(token));
+    const j = await r.json();
+    const items = (j && j.items) || [];
+    el.innerHTML = items.length ? items.map(it => {
+      const nm = escapeHtml(it.site || it.exe || it.win_class || '未命名');
+      const src = escapeHtml((it.exe || it.win_class || '未知应用') + ' · ' + it.kind);
+      return `<div class="focus-row"><span class="nm">${nm}<small>${src}</small></span>` +
+        `<button data-fre="${it.id}">重录</button><button data-fdel="${it.id}">删</button></div>`;
+    }).join('') : '<div class="focus-empty">还没有记录：先点击目标应用的输入框，再按上面「📍 记录位置」</div>';
+    el.querySelectorAll('[data-fdel]').forEach(b =>
+      b.onclick = async () => { await api('/api/cmd', { cmd: 'focus_delete', id: b.dataset.fdel }); renderFocusList(); });
+    el.querySelectorAll('[data-fre]').forEach(b => b.onclick = () => armLearn());
+  } catch (e) { /* 服务不可达时静默 */ }
+}
+
+// ---- 常用键 / 更多 面板 ----
+const keypop = $('#keypop'), sheetWrap = $('#sheetWrap');
+$('#btnKeys').onclick = () => {
+  sheetWrap.classList.remove('show');
+  closeRemote(false);          // 与遥控面板互斥: 收起并关掉电脑端高亮
+  keypop.classList.toggle('show');
+};
+$('#btnMore').onclick = () => {
+  keypop.classList.remove('show');
+  sheetWrap.classList.add('show');
+  setInputLock(true);      // 菜单打开期间禁止输入
+  renderFocusList();       // 刷新按应用档案列表
+};
+$('#btnClose').onclick = () => { sheetWrap.classList.remove('show'); setInputLock(false); };
+$('#backdrop').onclick = () => { sheetWrap.classList.remove('show'); setInputLock(false); };
+function setInputLock(lock) {
+  textEl.readOnly = lock;
+  if (lock) textEl.blur();  // 收起手机键盘
+  updatePadOv();            // 菜单开着时摘掉手势层
+}
+
+// ---- 更多功能左右翻页 (同常用键: 滑动切页, 滑动拦截误触点击) ----
+const sheetPages = $('#sheetPages');
+let shPage = 0, shTouchX = null, shTouchY = null, shMoved = false;
+function setSheetPage(p) {
+  shPage = Math.min(1, Math.max(0, p));
+  sheetPages.style.transform = `translateX(-${shPage * 50}%)`;
+  document.querySelectorAll('#sheetDots span').forEach((d, i) => d.classList.toggle('on', i === shPage));
+}
+document.querySelectorAll('#sheetDots span').forEach((d, i) => d.onclick = () => setSheetPage(i));
+sheetPages.addEventListener('touchstart', e => {
+  shTouchX = e.touches[0].clientX;
+  shTouchY = e.touches[0].clientY;
+  shMoved = false;
+}, { passive: true });
+sheetPages.addEventListener('touchmove', e => {
+  if (shTouchX === null) return;
+  const dx = e.touches[0].clientX - shTouchX, dy = e.touches[0].clientY - shTouchY;
+  if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) { e.preventDefault(); shMoved = true; }
+}, { passive: false });
+sheetPages.addEventListener('touchend', e => {
+  if (shTouchX === null) return;
+  const dx = e.changedTouches[0].clientX - shTouchX, dy = e.changedTouches[0].clientY - shTouchY;
+  if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) setSheetPage(shPage + (dx < 0 ? 1 : -1));
+  shTouchX = null;
+  setTimeout(() => { shMoved = false; }, 60);
+}, { passive: true });
+sheetPages.addEventListener('click', e => {
+  if (shMoved) { e.stopPropagation(); e.preventDefault(); shMoved = false; }
+}, true);
+
+document.addEventListener('click', e => {
+  if (!keypop.classList.contains('show')) return;
+  if (keypop.contains(e.target) || e.target.closest('#keys')) return;  // 输入区交互不关闭常用键
+  keypop.classList.remove('show');
+});
+
+// 常用键翻页: 左右滑动切换 (两页三行), 滑动时拦截误触的按钮点击
+const keypages = $('#keypages');
+let kpPage = 0, kpTouchX = null, kpMoved = false;
+function setKeyPage(p) {
+  kpPage = Math.min(2, Math.max(0, p));
+  keypages.style.transform = `translateX(-${kpPage * 33.3333}%)`;
+}
+keypop.addEventListener('touchstart', e => {
+  kpTouchX = e.touches[0].clientX;
+  kpMoved = false;
+}, { passive: true });
+keypop.addEventListener('touchmove', e => {
+  if (kpTouchX !== null && Math.abs(e.touches[0].clientX - kpTouchX) > 12) kpMoved = true;
+}, { passive: true });
+keypop.addEventListener('touchend', e => {
+  if (kpTouchX === null) return;
+  const dx = e.changedTouches[0].clientX - kpTouchX;
+  if (kpMoved && Math.abs(dx) > 40) setKeyPage(kpPage + (dx < 0 ? 1 : -1));
+  kpTouchX = null;
+  setTimeout(() => { kpMoved = false; }, 60);
+}, { passive: true });
+keypop.addEventListener('click', e => {
+  if (kpMoved) { e.stopPropagation(); e.preventDefault(); kpMoved = false; }
+}, true);
+// 面板已移入触控板内部: 阻断指针事件冒泡, 避免点按钮被当成触控板手势
+['pointerdown', 'pointermove', 'pointerup', 'pointercancel'].forEach(ev =>
+  keypop.addEventListener(ev, e => e.stopPropagation()));
+// 打字时点按钮不抢焦点: 按下瞬间阻止默认聚焦, 手机键盘保持弹出
+// (遥控开关/拖拽开关除外: 点完该收键盘用触控板)
+document.querySelectorAll('#keys button, #keypop button, #remote button').forEach(b => {
+  if (b.id === 'btnRemote' || b.id === 'btnDrag') return;
+  b.addEventListener('pointerdown', e => e.preventDefault());
+});
+// 调试预览: ?demo=keys|sheet 自动展开对应面板, ?demo=probe 探测视口
+const demo = new URLSearchParams(location.search).get('demo');
+if (demo === 'keys') keypop.classList.add('show');
+if (demo === 'sheet') sheetWrap.classList.add('show');
+if (demo === 'probe') {
+  document.querySelector('#textInput').value =
+    `iw=${window.innerWidth} ih=${window.innerHeight} dpr=${window.devicePixelRatio}`;
+}
+
+// ---- 实时上屏（常开）: 手机框是唯一事实源, 每条操作带绝对锚点 at, 服务端按镜像差值对齐 ----
+// 协议(见 server.py stream_input): {at,del,ins} 锚定编辑 / {at} 光标定位 / {key,n} 相对按键 / {reset} 镜像归零
+// 第一性原理: 旧方案"盲发 del/ins + 客户端猜电脑光标"一处竞态即永久发散; 锚定操作单条自含坐标,
+// 丢包/乱序只影响那一条, 后续自动回正。
+const textEl = $('#textInput');
+// ---- 字形簇(glypheme)坐标: 协议统一单位 = 用户感知字符(1 个 emoji 算 1) ----
+// JS 字符串索引是 UTF-16 码元(emoji=2), 电脑端方向键/退格按感知字符移动 —— 发送 at/del 前必须换算。
+// 无 Intl.Segmenter 的旧浏览器退化为码点([...s], 代理对仍算 1, 复杂 ZWJ emoji 会偏差, 可接受)。
+const _SEG = (typeof Intl !== 'undefined' && Intl.Segmenter)
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+function gCount(s) {
+  if (!_SEG) { let n = 0; for (const _ of s) n++; return n; }
+  let n = 0; for (const _ of _SEG.segment(s)) n++;
+  return n;
+}
+function gIndexOf(s, u16) {          // utf16 偏移 -> 字形簇索引
+  if (!_SEG) { let n = 0, acc = 0; for (const ch of s) { if (acc >= u16) break; acc += ch.length; n++; } return n; }
+  let n = 0, acc = 0;
+  for (const seg of _SEG.segment(s)) { if (acc >= u16) break; acc += seg.segment.length; n++; }
+  return n;
+}
+function gLastLen(s) {               // 末尾字形簇的 utf16 宽度(整簇删除用, 防劈开代理对)
+  if (!s) return 0;
+  if (!_SEG) { const arr = [...s]; return arr[arr.length - 1].length; }
+  let last = '';
+  for (const seg of _SEG.segment(s)) last = seg.segment;
+  return last.length;
+}
+let lastSynced = textEl.value;
+let composing = false;
+let pendingIns = null, insTimer = null;    // 尾部追加合并: {at(簇), atU16(utf16), text}
+let writeChain = Promise.resolve();
+let cursorTimer = null, pendingPos = 0;    // 点文字定位: 80ms 防抖取最后位置; 编辑随时可作废(锚点自含)
+let readTimer = null;                      // 岛模式读回防抖
+let caretAtEnd = true;                     // 电脑光标==镜像末尾: ⌫ 按钮可精确回退镜像; 定位/导航过则失明
+let mirrorFull = false;                    // 镜像是否覆盖整个电脑输入框(读回成功后 true): 整框时点定位无需重读
+let editCaret = -1;                        // 最近编辑落点: selectionchange 与之相等=编辑带动光标, 不触发读回
+let readFails = 0;                         // 连续读回失败次数(UIA 盲区应用退避, 避免每次定位都空跑)
+let queuedOps = 0;                         // 在途写链请求数: 归零才算"与电脑端对齐的稳定时刻"
+let chainIdle = true;                      // 写链空闲(所有编辑已送达电脑端)
+let opCount = 0;                           // 已排队编辑操作数(自动对账期间防竞态)
+let caretGen = 0;                          // 用户定位代次: 点击一发生就作废旧读回, 不等 80ms 后发请求
+let lastUserOp = 0;                        // 最近用户操作时间: 活跃期暂停周期对账, 避免读回干扰正在进行的输入/定位
+
+function chainFetch(path, body) {
+  lastUserOp = Date.now();
+  queuedOps++; opCount++;
+  chainIdle = false;
+  writeChain = writeChain.then(() => fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Token': token },
+    body: JSON.stringify(body)
+  }).then(r => { if (r.status === 403) setConn('Token 无效，请重新扫码', true); }))
+    .then(() => { queuedOps--; if (!queuedOps) chainIdle = true; })
+    .catch(() => { queuedOps--; if (!queuedOps) chainIdle = true; });
+  return writeChain;
+}
+function doSend(body) { return chainFetch('/api/stream', body); }
+function flushIns() {
+  clearTimeout(insTimer); insTimer = null;
+  if (pendingIns) {
+    const p = pendingIns; pendingIns = null;
+    doSend({ at: p.at, del: 0, ins: p.text });
+  }
+}
+function syncNow() {
+  clearTimeout(cursorTimer); cursorTimer = null;  // 编辑自带锚点, 待发定位作废
+  const cur = textEl.value;
+  if (cur === lastSynced) return;
+  let p = 0;                                       // 公共前缀 = 编辑起点(旧缓冲坐标)
+  const maxP = Math.min(cur.length, lastSynced.length);
+  while (p < maxP && cur[p] === lastSynced[p]) p++;
+  let s = 0;                                       // 公共后缀
+  const maxS = Math.min(cur.length, lastSynced.length) - p;
+  while (s < maxS && cur[cur.length - 1 - s] === lastSynced[lastSynced.length - 1 - s]) s++;
+  const del = lastSynced.length - p - s;
+  const ins = cur.slice(p, cur.length - s);
+  const atG = gIndexOf(lastSynced, p);                               // 锚点: 字形簇坐标
+  const delG = gCount(lastSynced.slice(p, lastSynced.length - s));   // 删除段: 字形簇数
+  if (!lastSynced) {                               // 空镜像 = 原点跟随电脑光标: 相对注入, 不对位
+    flushIns();
+    if (del > 0 || ins) doSend({ del: delG, ins: ins });
+  } else if (!del && ins && p === lastSynced.length) {   // 尾部追加: 合并发送减请求量
+    if (pendingIns && p === pendingIns.atU16 + pendingIns.text.length) pendingIns.text += ins;
+    else {
+      flushIns();
+      pendingIns = { at: atG, atU16: p, text: ins };
+      if (!insTimer) insTimer = setTimeout(flushIns, 30);
+    }
+  } else {                                         // 中段插入/删除/替换: 单条锚定
+    flushIns();
+    if (del > 0 || ins) doSend({ at: atG, del: delG, ins: ins });
+  }
+  caretAtEnd = (p + ins.length === cur.length);    // 编辑落点==镜像尾时 ⌫ 按钮可精确回退
+  editCaret = p + ins.length;                      // 本次编辑把光标带到这里
+  lastSynced = cur;
+  scheduleSyncCheck();                             // 输入后挂起对账: 停顿 600ms 自动比对电脑端现状
+}
+
+// 中文输入法: 组合期不上传(不漏原始拼音), 上屏后走完整 diff 锚定提交(组合文本可落在任意位置)
+textEl.addEventListener('compositionstart', () => { composing = true; updatePadOv(); });
+textEl.addEventListener('compositionend', () => {
+  composing = false;
+  updatePadOv();
+  syncNow();
+});
+textEl.addEventListener('input', e => {
+  if (composing || /^insertComposition|^deleteComposition/.test(e.inputType || '')) return;
+  syncNow();
+  updatePadOv();
+});
+// 光标定位请求(点文字定位统一入口): 80ms 防抖取最后位置, 编辑随时可作废(锚点自含)
+function requestCursor(pos) {
+  caretGen++;                               // 立即失效旧读回, 防止 80ms 防抖窗口内回写旧光标
+  lastUserOp = Date.now();
+  pendingPos = pos;
+  caretAtEnd = (pos === lastSynced.length);
+  const ref = lastSynced;    // 防抖期间镜像不会变(编辑会作废本定位)
+  clearTimeout(cursorTimer);
+  cursorTimer = setTimeout(() => { cursorTimer = null; doSend({ at: gIndexOf(ref, pendingPos) }); }, 80);
+}
+// 岛模式读回: 用户主动定位而镜像没覆盖整框时, 先读回全文+光标再定位(定位意图触发, 不跟编辑走)。
+// 盲区应用走 clip 兜底通道; 连续失败 4 次封顶(防全选闪烁循环), 聚焦事件时清零重试。
+function requestReadback() {
+  if (mirrorFull || readFails >= 4 || textEl.readOnly) return;
+  clearTimeout(readTimer);
+  readTimer = setTimeout(() => {
+    readTimer = null;
+    flushIns();
+    const snap = opCount, gen = caretGen;
+    writeChain = writeChain
+      .then(() => api('/api/cmd', { cmd: 'focus_read', clip: readFails >= 1 ? 1 : 0 }))
+      .then(j => {
+        if (opCount !== snap || caretGen !== gen) return; // 读回期间有定位/编辑: 结果已过期
+        if (applyReadback(j, true)) readFails = 0;         // 升级整框镜像, 保留用户刚点击的位置
+        else readFails++;
+      })
+      .catch(() => { readFails++; });
+  }, 120);
+}
+// 自动对账调度: 手机端编辑后 600ms 快速对账; 手机框聚焦期间周期巡检
+// (安全网: 手机端无编辑活动时, 电脑端的框外改动也会被拉回手机框)。
+// 盲区应用(UIA 读不到)不再停摆: 转剪贴板通道慢速巡检(10s), UIA 读成功(reason='')即退出盲区。
+// 停止条件: 手机框失焦/页面后台/输入法组合中 -> 下次聚焦自动重新挂起。
+let syncTimer = null;
+let blindMode = false;
+function scheduleSyncCheck(delay) {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncCheckTick, delay || 600);
+}
+function syncCheckTick() {
+  syncTimer = null;
+  if (composing || textEl.readOnly || document.activeElement !== textEl) return;
+  if (document.visibilityState !== 'visible') return;
+  if (Date.now() - lastUserOp < 3000) { scheduleSyncCheck(1000); return; }   // 用户 3s 内有操作: 巡逻推迟, 不打扰
+  if (pendingIns || !chainIdle || cursorTimer) { scheduleSyncCheck(400); return; }   // 忙: 稍后重试
+  const wasBlind = blindMode;
+  const snap = opCount, gen = caretGen;
+  // 不占用写链: 周期读回可能被慢 UIA 拖住数秒, 挂在写链上会堵死打字/定位(卡顿根源之一);
+  // 结果过期由 opCount/caretGen 代次守卫丢弃。
+  api('/api/cmd', { cmd: 'focus_read', clip: 0 })   // 周期巡逻禁用剪贴板兜底: Ctrl+A 全选闪烁 = 电脑光标"消失"
+    .then(j => {
+      if (opCount !== snap || caretGen !== gen) { scheduleSyncCheck(400); return; }   // 读回期间又有编辑/定位: 重来
+      if (!j || !j.ok) { scheduleSyncCheck(wasBlind ? 10000 : 2500); return; }
+      // 服务端把 dict 结果摊平到顶层(ok/msg/text/caret 同级): 两种形状都兼容
+      const r = (j.msg && typeof j.msg === 'object') ? j.msg : j;
+      if (typeof r.text !== 'string') {
+        if (!wasBlind) { readFails++; if (readFails >= 2) blindMode = true; }        // 盲区: 慢速巡检
+        scheduleSyncCheck((wasBlind || blindMode) ? 10000 : 2500);
+        return;
+      }
+      if (!wasBlind || j.reason === '') blindMode = false;   // UIA 读成功: 可读应用
+      readFails = 0;
+      const before = textEl.value;
+      applyReadback(j, true);                // 周期对账只更新文本/镜像, 手机光标由用户点击主导
+      if (textEl.value !== before) toast('检测到电脑端改动，已自动同步');
+      scheduleSyncCheck(wasBlind ? 10000 : 2500);
+    })
+    .catch(() => { scheduleSyncCheck(wasBlind ? 10000 : 2500); });
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && document.activeElement === textEl && (readFails < 2 || blindMode)) scheduleSyncCheck(600);
+});
+// 手机上点按/移动光标 -> 电脑光标跟到对应位置; 空镜像=原点跟随电脑光标, 不做定位
+let selGen = 0;   // selectionchange 代数: 使在途读回过期(读回快照早于本次光标移动则丢弃)
+document.addEventListener('selectionchange', () => {
+  selGen++;
+  if (composing || document.activeElement !== textEl) return;
+  if (textEl.selectionStart !== textEl.selectionEnd) return;
+  if (!lastSynced) return;
+  const pos = textEl.selectionStart;
+  if (pos === editCaret) { editCaret = -1; return; }   // 编辑/读回带动光标: 电脑端已在该位, 回显定位是空操作,
+                                                       // 且会 clearTimeout 取消用户刚点的定位(点哪都不动) -> 不发
+  requestCursor(pos);                      // 岛坐标锚定: 岛内定位始终有效(盲区应用也不失去定位)
+  if (!mirrorFull) requestReadback();      // 并行尝试读回升级整框(UIA 可读应用)
+});
+// 点手机输入框(获得焦点) = 电脑自动聚焦目标输入框, 并读回全文+光标位置预填手机框。
+// 预填后镜像=整个电脑输入框: 删除/光标/点定位可作用于全部内容(含手机没打过的部分)。
+// 服务端用 UIA TextPattern 读回光标绝对位置 -> 精确对齐且不动电脑光标; 读不到才 Ctrl+End 归位字段尾。
+// 读回请求串入写链: 保证先送达的编辑先落电脑、先计入读回文本, 不会重复。
+let lastCustom = '';          // 最近点过的自定义按钮名: 聚焦/学习时按它取档案
+let kbSuppress = false;       // 联动弹键盘的程序化 focus 不触发档案回放(触控板点击已落在输入框上)
+let focusInFlight = false;    // focus_input 在途守卫: UIA 慢扫描期间不叠加重复聚焦请求
+let lastFocusAt = 0;          // 上次聚焦请求完成时间: 2s 内的重复 focus 事件直接复用结果
+function applyReadback(j, preserveCaret = false) {
+  if (!j || !j.ok) return false;
+  // 服务端把 dict 结果摊平到顶层({ok, msg:"已聚焦…", text, caret}); 兼容嵌套与摊平两种形状
+  const r = (j.msg && typeof j.msg === 'object') ? j.msg : { msg: j.msg || '', text: j.text, caret: j.caret };
+  if (r.msg) toast(r.msg);
+  if (typeof r.text !== 'string') return false;
+  const oldCaret = textEl.selectionStart || 0;
+  if (r.text !== textEl.value) {
+    textEl.value = r.text;         // 电脑端清空时 r.text='' -> 手机框跟着清空(空字段采纳)
+    pendingIns = null;
+  }
+  lastSynced = textEl.value;         // 浏览器把 \r\n 归一成 \n: 镜像以归一化后的值为准, 与服务端一致
+  // 定位后的读回/周期对账保留手机光标; 仅聚焦预填采用电脑端 caret
+  const cp = preserveCaret
+    ? Math.max(0, Math.min(oldCaret, lastSynced.length))
+    : Number.isFinite(r.caret)
+      ? Math.max(0, Math.min(r.caret, lastSynced.length))
+      : Math.max(0, Math.min(oldCaret, lastSynced.length));
+  mirrorFull = true;                 // 读回成功: 镜像=整框, 点定位覆盖全部内容
+  caretAtEnd = (cp === lastSynced.length);
+  editCaret = cp;                    // 程序化定位不触发读回
+  try { if (cp !== textEl.selectionStart) textEl.setSelectionRange(cp, cp); } catch (e) { }   // 相同则不动, 免无谓 selectionchange
+  updatePadOv();
+  return true;
+}
+// 主动读回(已聚焦再点等场景): 不占用写链, 编辑在途时丢弃(镜像由锚定操作自回正)。
+// 点按同步 clip 固定 1(用户显式意图): 记事本走 Win32 直读, Chromium 走 CDP/UIA 显式读回;
+// 服务端限频窗口内被跳过(chromium-blind)时 350ms 后自动补发, 保证最后一次点击必然同步。
+let lastReadAt = 0;
+let chromReplay = false;
+function syncReadbackNow(minGap) {
+  const now = Date.now();
+  const gap = (minGap === undefined || minGap === null) ? 400 : minGap;   // 0 = 补发直通, 不能被 || 默认值吞掉
+  if (now - lastReadAt < gap) return;
+  if (pendingIns || queuedOps || cursorTimer) return;
+  lastReadAt = now;
+  const snap = opCount, gen = selGen, caretSnap = caretGen;
+  api('/api/cmd', { cmd: 'focus_read', clip: 1 })
+    .then(j => {
+      // 读回期间一旦有光标移动/编辑, 结果即过期丢弃, 否则旧光标会回写手机
+      if (opCount !== snap || selGen !== gen || caretGen !== caretSnap || pendingIns || queuedOps) return;
+      if (j && j.reason && j.reason.indexOf('chromium') === 0 && !chromReplay) {
+        chromReplay = true;   // 服务端限频窗口内被跳过: 350ms 后补发一次
+        setTimeout(() => { chromReplay = false; syncReadbackNow(0); }, 350);
+        return;
+      }
+      applyReadback(j, true);
+    })
+    .catch(() => { });
+}
+textEl.addEventListener('pointerdown', () => {
+  if (composing || textEl.readOnly) return;
+  if (document.activeElement === textEl) {   // 已聚焦: focus 不会再发, 点一下主动读回
+    readFails = 0;
+    syncReadbackNow(400);
+  }
+});
+// 每次点按都显式定位: 同位置重复点击不会触发 selectionchange, 仍需让电脑执行本次绝对定位。
+// 延迟到本轮事件结束后读取, 确保拿到浏览器完成点按后的最终 selectionStart。
+textEl.addEventListener('pointerup', () => {
+  setTimeout(() => {
+    if (composing || textEl.readOnly || document.activeElement !== textEl) return;
+    if (textEl.selectionStart !== textEl.selectionEnd || !lastSynced) return;
+    requestCursor(textEl.selectionStart);
+    if (!mirrorFull) requestReadback();
+  }, 0);
+});
+textEl.addEventListener('focus', () => {
+  if (kbSuppress) return;
+  const now = Date.now();
+  if (focusInFlight || now - lastFocusAt < 2000) {   // 在途/刚完成: 不重复发聚焦(UIA 慢扫描最坏 25-30s)
+    readFails = 0;
+    scheduleSyncCheck(2500);
+    return;
+  }
+  readFails = 0;             // 重新聚焦: 盲区退避解除, 再给读回机会
+  flushIns();
+  focusInFlight = true;
+  const snap = opCount, gen = caretGen;
+  // 聚焦兜底最坏 25-30s: 不再占用写链(否则一次慢聚焦堵死所有打字/定位); 读回并行返回,
+  // 返回时编辑在途则丢弃(镜像由锚定操作自回正)
+  api('/api/cmd', { cmd: 'focus_input', name: lastCustom })
+    .then(j => {
+      if (opCount !== snap || caretGen !== gen || pendingIns || queuedOps) return;
+      const before = textEl.value;
+      applyReadback(j);
+      if (textEl.value !== before) toast(`已同步: ${textEl.value.slice(0, 14)} (${textEl.value.length}字)`);
+      scheduleSyncCheck(2500);
+    })   // 聚焦后挂起周期巡检
+    .catch(() => { })
+    .finally(() => { focusInFlight = false; lastFocusAt = Date.now(); });
+});
+
+// ---- ⌨ 点按联动: 开启后触控板「点按」发往电脑时附带落点判定,
+//      服务端判定点击落在输入框上 -> 手机输入框聚焦弹键盘(直接打字);
+//      非输入区域不弹。右键不触发。状态持久化。 ----
+let kbLink = localStorage.getItem('kzq_kb_link') === '1';
+const btnKbLink = $('#btnKbLink');
+function applyKbLink() {
+  btnKbLink.classList.toggle('on', kbLink);
+  localStorage.setItem('kzq_kb_link', kbLink ? '1' : '0');
+}
+applyKbLink();
+btnKbLink.onclick = () => {
+  kbLink = !kbLink;
+  applyKbLink();
+  toast(kbLink ? '键盘联动开：触控板点输入框时手机弹键盘' : '键盘联动关');
+};
+// 键盘直删与边界逃逸(预填失败/镜像为岛时, 电脑端还有镜像外的前缀/后缀内容):
+// - 空框退格 / 框首退格: 相对退格删电脑光标前的字(岛外前缀对镜像不可见)
+// - 框首← / 框尾→: 相对方向键走出镜像边界(镜像外为负/超长坐标, 服务端只挪账目)
+// - Enter = 提交: 冲账尾巴 -> 电脑回车 -> 手机框清空, 两端镜像同步归零
+// (程序化清空不触发 input, 不会向电脑发删除; Shift+Enter 不拦; 输入法组合中的按键全部放行)
+textEl.addEventListener('keydown', e => {
+  if (textEl.readOnly || e.isComposing || e.keyCode === 229 || composing) return;
+  const collapsed = textEl.selectionStart === textEl.selectionEnd;
+  if (e.key === 'Backspace' || e.keyCode === 8) {
+    if (textEl.value === '' || (collapsed && textEl.selectionStart === 0)) {
+      e.preventDefault();
+      doSend({ key: 'backspace' });
+    }
+    return;
+  }
+  if (collapsed && e.key === 'ArrowLeft' && textEl.selectionStart === 0) {
+    e.preventDefault();
+    if (lastSynced) caretAtEnd = false;
+    doSend({ key: 'left', n: 1 });
+    return;
+  }
+  if (collapsed && e.key === 'ArrowRight' && textEl.selectionStart === textEl.value.length) {
+    e.preventDefault();
+    if (lastSynced) caretAtEnd = false;
+    doSend({ key: 'right', n: 1 });
+    return;
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    flushIns();
+    doSend({ key: 'enter' });
+    doSend({ reset: 1 });
+    textEl.value = '';
+    lastSynced = '';
+    caretAtEnd = true;
+    mirrorFull = false;
+    editCaret = -1;
+    updatePadOv();
+    scheduleSyncCheck(1500);   // 回车重置后延迟对账: 给慢清空的应用留时间, 防误回填已发送内容
+  }
+});
+
+// ---- 空框 = 光标滑动板(手势层) ----
+// 第一性原理: 空文本框上的单指滑动会被浏览器(原生光标拖拽/选区放大镜)和输入法手势层优先接管,
+// touchmove preventDefault 拦不完全; 与其和原生手势仲裁抢事件, 不如空框时给输入框盖一层透明
+// 手势层独占触摸——滑动发←/→/↑/↓(约32px一格, 长滑连发), 点按聚焦弹键盘; 有字立刻摘掉不影响编辑。
+const padOv = document.createElement('div');
+padOv.style.cssText = 'position:absolute;left:12px;right:12px;top:10px;height:52px;z-index:2;touch-action:none;display:none';
+$('#keys').appendChild(padOv);
+function updatePadOv() {
+  padOv.style.display = (!composing && !textEl.readOnly && textEl.value === '') ? 'block' : 'none';
+}
+let ovX0 = null, ovY0 = null, ovNX = 0, ovNY = 0;
+padOv._moved = false;
+function accelCount(px) {          // 加速映射: 32px≈1格起步, 远滑按幂次加速(像视频快进), 长距离不用来回蹭
+  const a = Math.abs(px) / 32;
+  return Math.sign(px) * Math.round(Math.pow(a, 1.8));
+}
+padOv.addEventListener('touchstart', e => {
+  if (e.touches.length !== 1) { ovX0 = null; return; }
+  ovX0 = e.touches[0].clientX;
+  ovY0 = e.touches[0].clientY;
+  ovNX = ovNY = 0;
+  padOv._moved = false;
+}, { passive: true });
+padOv.addEventListener('touchmove', e => {
+  if (ovX0 === null) return;
+  e.preventDefault();                    // 手势层无原生行为, 滑动只产出方向键
+  padOv._moved = true;
+  const t = e.touches[0];
+  const dx = t.clientX - ovX0, dy = t.clientY - ovY0;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const n = accelCount(dx);
+    const delta = n - ovNX;
+    if (delta) { doSend({ key: delta > 0 ? 'right' : 'left', n: Math.abs(delta) }); ovNX = n; }
+  } else {
+    const n = accelCount(dy);
+    const delta = n - ovNY;
+    if (delta) { doSend({ key: delta > 0 ? 'down' : 'up', n: Math.abs(delta) }); ovNY = n; }
+  }
+}, { passive: false });
+padOv.addEventListener('touchend', () => {
+  if (ovX0 === null) return;
+  ovX0 = null;
+  if (!padOv._moved) textEl.focus();     // 没滑 = 点按: 弹键盘, 触发电脑端聚焦
+});
+padOv.addEventListener('touchcancel', () => { ovX0 = null; });
+padOv.addEventListener('click', () => textEl.focus());   // 桌面鼠标也能点进输入框
+updatePadOv();   // 初始显隐
+
+// ---- 按键 / 命令 ----
+// 盲键 = 电脑端文本/光标离开镜像坐标系的键(回车/导航/组合键/粘贴等效果未知):
+// 冲账尾巴后重置手机框与镜像(与回车提交一致), 退化为原点跟随, 重新聚焦时由预填重建。
+const BLIND_KEYS = new Set(['enter', 'esc', 'tab', 'delete', 'up', 'down', 'home', 'end', 'pageup', 'pagedown']);
+function resetMirror() {
+  flushIns();
+  clearTimeout(cursorTimer); cursorTimer = null;
+  clearTimeout(readTimer); readTimer = null;
+  textEl.value = '';
+  lastSynced = '';
+  pendingIns = null;
+  caretAtEnd = true;
+  mirrorFull = false;
+  editCaret = -1;
+  updatePadOv();
+}
+document.querySelectorAll('[data-key]').forEach(b =>
+  b.onclick = () => {
+    const key = b.dataset.key;
+    if (key === 'backspace') {
+      if (lastSynced && !caretAtEnd) {          // 电脑光标不在镜像末尾: 删哪儿未知, 盲删+重置
+        doSend({ key: 'backspace' });
+        resetMirror();
+        toast('电脑光标不在框尾：已重置手机框');
+      } else if (textEl.value) {                // 光标在镜像末尾: 框与镜像精确回退一簇(emoji 整体删)
+        const gl = gLastLen(textEl.value);
+        textEl.value = textEl.value.slice(0, textEl.value.length - gl);
+        lastSynced = lastSynced.slice(0, lastSynced.length - gl);
+        doSend({ key: 'backspace' });
+        updatePadOv();
+      } else {
+        doSend({ key: 'backspace' });           // 空框: 相对退格删电脑上的字
+      }
+      return;
+    }
+    if (key === 'left' || key === 'right') {
+      if (lastSynced) caretAtEnd = false;                 // 相对移动后光标不再保证在框尾
+      if (b._repeatSent) { b._repeatSent = 0; return; }   // 长按连发已发, 抑制收尾 click 多发一格
+    }
+    if (BLIND_KEYS.has(key)) resetMirror();
+    doSend({ key: key });
+  });
+// ←/→ 长按加速连发: 400ms 起跳, 步长随按住时长 2→4→8, 松开即停; 短按仍是一格
+document.querySelectorAll('[data-key="left"],[data-key="right"]').forEach(b => {
+  const key = b.dataset.key;
+  let timer = null, t0 = 0;
+  const stop = () => { clearTimeout(timer); timer = null; };
+  b.addEventListener('pointerdown', () => {
+    b._repeatSent = 0;
+    t0 = performance.now();
+    timer = setTimeout(function tick() {
+      const held = performance.now() - t0;
+      const step = held > 1600 ? 8 : held > 1000 ? 4 : 2;
+      doSend({ key: key, n: step });
+      b._repeatSent += step;
+      timer = setTimeout(tick, 90);
+    }, 400);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, stop));
+  b.addEventListener('contextmenu', e => e.preventDefault());   // 长按不弹系统菜单
+});
+document.querySelectorAll('[data-combo]').forEach(b =>
+  b.onclick = () => {
+    resetMirror();
+    chainFetch('/api/key', { combo: b.dataset.combo.split(',') });
+  });
+document.querySelectorAll('[data-cmd]').forEach(b =>
+  b.onclick = async () => {
+    if (b.dataset.confirm && !confirm(b.dataset.confirm)) return;
+    const isToggle = b.dataset.mode === 'toggle';
+    let played = false;
+    if (b._anim) {                       // 图标挂载成功才联动动画; 确认通过后才播, 取消弹窗不动
+      if (isToggle) { b._on = !b._on; playToggle(b, b._on); }
+      else playPulse(b);
+      played = true;
+    }
+    try {
+      const j = await api('/api/cmd', { cmd: b.dataset.cmd });
+      if (j.ok) toast(j.msg || '已执行');
+      else if (played) animRollback(b, isToggle);   // 服务端明确失败: 动画撤回
+    } catch (e) {
+      if (played) animRollback(b, isToggle);        // 网络异常/403: 动画撤回
+    }
+  });
+function animRollback(el, isToggle) {
+  if (!el._anim) return;
+  if (isToggle) { el._on = !el._on; playToggle(el, el._on); }
+  else el._anim.goToAndStop(el._rest, true);        // 一次性手势直接归位
+}
+
+// ---- 自定义按钮 (来自 custom.json, 改文件即生效) ----
+(async () => {
+  try {
+    const r = await fetch('/api/customs?t=' + encodeURIComponent(token));
+    const j = await r.json();
+    const items = (j && j.items) || [];
+    if (!items.length) return;
+    const grid = $('#customGrid');
+    grid.innerHTML = items.map(it =>
+      `<button data-custom="${encodeURIComponent(it.name)}">${String(it.name).replace(/[<>&"]/g, '')}</button>`
+    ).join('');
+    $('#customSec').style.display = '';
+    grid.querySelectorAll('[data-custom]').forEach(b =>
+      b.onclick = async () => {
+        lastCustom = decodeURIComponent(b.dataset.custom);   // 供聚焦/位置学习按按钮绑定
+        const j2 = await api('/api/custom', { name: lastCustom });
+        if (j2.ok) toast(j2.msg || '已执行');
+      });
+  } catch (e) { /* 没有自定义也不影响其他功能 */ }
+})();
+
+// ---- 主题 (深浅双模式: 变量切换 + 图标随主题重挂载) ----
+const THEME_KEY = 'kzq_theme';
+const rootEl = document.documentElement;
+const themeMeta = document.querySelector('meta[name="theme-color"]');
+let theme = rootEl.dataset.theme === 'light' ? 'light' : 'dark';   // head 内联脚本已定初始值
+const btnTheme = $('#btnTheme');
+btnTheme.dataset.init = theme === 'dark' ? '1' : '0';              // 初始深色=月亮亮起态
+const setMeta = t => themeMeta.content = t === 'light' ? '#e9edf4' : '#0f1115';
+setMeta(theme);
+const prefersDark = matchMedia('(prefers-color-scheme: dark)');
+prefersDark.addEventListener('change', e => {                      // 未手动选过才跟随系统
+  if (!localStorage.getItem(THEME_KEY)) applyTheme(e.matches ? 'dark' : 'light');
+});
+function applyTheme(t) {
+  theme = t;
+  rootEl.dataset.theme = t;
+  setMeta(t);
+  remountIcons();   // 描边色随主题, 全部图标销毁重挂 (缓存按主题存, 切回秒出)
+}
+btnTheme.onclick = () => {
+  const next = theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  btnTheme._on = next === 'dark';
+  applyTheme(next);
+  if (btnTheme._anim && !REDUCED.matches) playPulse(btnTheme);     // 切换反馈: 新图标完整播放一次
+};
+
+// ---- useanimations 图标 (Lottie 本地渲染, 描边重着色随主题) ----
+// 交互模型:
+//   toggle 状态机: 开启=从off帧播到on帧, 关闭=倒放回off帧 (方向由帧序自动决定, 与命令成败联动可回滚)
+//   pulse 一次性: 每次点击从手势段重播, 播完归位静止帧 (音量-波纹向内收/音量+倒放波纹向外放)
+const iconCache = {};        // key = 主题:动画名 (描边色随主题不同)
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
+const iconColor = () => theme === 'light' ? [0.18, 0.21, 0.27, 1] : [0.91, 0.93, 0.96, 1];
+function recolorLottie(node) {
+  if (Array.isArray(node)) { node.forEach(recolorLottie); return; }
+  if (node && typeof node === 'object') {
+    if ((node.ty === 'st' || node.ty === 'fl') && node.c && Array.isArray(node.c.k)) node.c.k = iconColor();
+    Object.values(node).forEach(recolorLottie);
+  }
+}
+// 主题差异化图标: data-anim-dark/data-anim-light 声明深浅各用什么 (主题按钮 sun/moon)
+const animName = el => el.dataset.animDark
+  ? (theme === 'dark' ? el.dataset.animDark : (el.dataset.animLight || el.dataset.animDark))
+  : el.dataset.anim;
+const frameNum = (v, total) => v === 'last' ? total - 1 : Math.min(Number(v) || 0, total - 1);
+
+async function mountIcon(el, name) {
+  try {
+    if (!window.lottie) return false;
+    const key = theme + ':' + name;
+    if (!iconCache[key]) {
+      const r = await fetch('anims/' + name + '.json');
+      if (!r.ok) return false;
+      const data = await r.json();
+      recolorLottie(data);
+      iconCache[key] = data;
+    }
+    const box = document.createElement('span');
+    box.className = 'ico';
+    el.prepend(box);
+    const anim = lottie.loadAnimation({
+      container: box, renderer: 'svg', loop: false, autoplay: false,
+      animationData: JSON.parse(JSON.stringify(iconCache[key]))
+    });
+    anim.setSpeed(1.5);
+    const total = anim.totalFrames;
+    el._anim = anim;
+    el._rest = el.dataset.static ? frameNum(el.dataset.static, total) : 0;
+    if (el.dataset.mode === 'toggle') {
+      el._onF = el.dataset.on ? frameNum(el.dataset.on, total) : total - 1;
+      el._offF = el.dataset.off ? frameNum(el.dataset.off, total) : 0;
+      el._on = el._on ?? el.dataset.init === '1';   // 主题重挂载时继承当前状态, 不重置
+      el._rest = el._on ? el._onF : el._offF;       // toggle 静止在当前状态帧
+    }
+    anim.goToAndStop(el._rest, true);
+    anim.addEventListener('complete', () => {       // 一次性手势播完归位, 保持静止长相统一
+      if (el._goRest) { el._goRest = false; anim.goToAndStop(el._rest, true); }
+    });
+    // 反馈型(无 cmd 无 mode): 按下即播保持即时感; 命令型/toggle 由 click 流程控制, 确保状态与命令一致
+    if (!el.dataset.cmd && el.dataset.mode !== 'toggle') {
+      el.addEventListener('pointerdown', () => playPulse(el));
+    }
+    return true;
+  } catch (e) { return false; }
+}
+function playToggle(el, on) {
+  const a = el._anim; if (!a) return;
+  if (REDUCED.matches) { a.goToAndStop(on ? el._onF : el._offF, true); return; }
+  const fwd = on ? el._onF >= el._offF : el._offF >= el._onF;   // 开启: off->on; 关闭: on->off
+  const lo = Math.min(el._onF, el._offF), hi = Math.max(el._onF, el._offF);
+  // 方向由段序号表达: 正序[lo,hi] lottie 自动正放, 反序[hi,lo] 自动倒放并站到段尾
+  // (手动 setDirection(-1) 会被 adjustSegment 在弹段时强制翻回 +1, 导致倒放失效)
+  if (fwd) a.playSegments([lo, hi], true);
+  else a.playSegments([hi, lo], true);
+}
+function playPulse(el) {
+  const a = el._anim; if (!a || REDUCED.matches) return;
+  const seg = (el.dataset.seg || '0').split(',').map(Number);
+  const f0 = seg[0], f1 = seg.length > 1 ? seg[1] : a.totalFrames - 1;
+  if (el.dataset.rev === '1') a.playSegments([f1, f0], true);   // 倒放: 波纹向外放
+  else a.playSegments([f0, f1], true);                          // 正放: 波纹向内收
+  el._goRest = true;
+}
+async function remountIcons() {
+  for (const el of [...document.querySelectorAll('[data-anim],[data-anim-dark]')]) {
+    if (el._anim) { el._anim.destroy(); el._anim = null; }
+    el.querySelector('.ico')?.remove();
+    el._goRest = false;
+    if (await mountIcon(el, animName(el))) el.classList.add('has-ico');
+  }
+}
+document.addEventListener('DOMContentLoaded', async () => {
+  if (!window.lottie) return;   // lottie 未加载则保留 emoji/文字兜底
+  for (const el of [...document.querySelectorAll('[data-anim],[data-anim-dark]')]) {
+    if (await mountIcon(el, animName(el))) el.classList.add('has-ico');
+  }
+});
+
+// ---- Liquid Glass 折射层 (Tier 2: feDisplacementMap + SDF 贴图, 仅 Chromium backdrop 支持) ----
+// 贴图按元素尺寸逐像素生成, 只在尺寸变化(防抖)时重生成; iOS/Firefox 自动降级 Tier1 磨砂
+function makeDisplacementMap(w, h, r, bezel) {
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  const sdf = (x, y) => {          // 圆角矩形有向距离: 内负外正
+    const qx = Math.abs(x - w / 2) - (w / 2 - r);
+    const qy = Math.abs(y - h / 2) - (h / 2 - r);
+    return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+  };
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const inset = -sdf(x, y);    // 距边缘的入距
+      let dx = 0, dy = 0;
+      if (inset > 0 && inset < bezel) {
+        const nx = sdf(x + 1, y) - sdf(x - 1, y);   // 梯度指向外
+        const ny = sdf(x, y + 1) - sdf(x, y - 1);
+        const len = Math.hypot(nx, ny) || 1;
+        const t = 1 - inset / bezel;                 // 边缘=1, 平坦区=0
+        const strength = t * t;                      // 平方衰减: 中间平坦
+        dx = (-nx / len) * strength;                 // 边缘处向中心采样 => 折射弯折
+        dy = (-ny / len) * strength;
+      }
+      const i = (y * w + x) * 4;
+      img.data[i] = 128 + dx * 127;      // R 通道: 水平位移
+      img.data[i + 1] = 128 + dy * 127;  // G 通道: 垂直位移
+      img.data[i + 2] = 128;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL();
+}
+const isChromium = navigator.userAgentData?.brands?.some(b => b.brand === 'Chromium') ?? false;
+const solidQuery = matchMedia('(prefers-reduced-transparency: reduce), (prefers-contrast: more)');
+let refractTimer = null;
+function applyRefract() {
+  const header = document.querySelector('header');
+  if (!header) return;
+  const ok = isChromium && !solidQuery.matches && window.CSS?.supports?.('backdrop-filter: blur(1px)');
+  header.classList.toggle('is-refracting', !!ok);
+  if (!ok) return;
+  const { width, height } = header.getBoundingClientRect();
+  if (width < 10 || height < 10) return;
+  const map = document.getElementById('lg-map');
+  map.setAttribute('width', Math.round(width));
+  map.setAttribute('height', Math.round(height));
+  map.setAttribute('href', makeDisplacementMap(Math.round(width), Math.round(height), 2, 16));
+}
+window.addEventListener('resize', () => {
+  clearTimeout(refractTimer);
+  refractTimer = setTimeout(applyRefract, 300);
+});
+solidQuery.addEventListener('change', applyRefract);
+applyRefract();
+
+// ---- 连接检测 ----
+api('/api/cmd', { cmd: 'ping' })
+  .then(() => setConn('已连接'))
+  .catch(() => setConn('未连接', true));
+
+// ---- 客户端自更新: 服务端页面文件更新后 30s 内自动刷新, 手机不再挂着旧版页面 ----
+// (token 在 URL/localStorage 中, 刷新不丢失; 打字中/输入法组合中延迟到停顿后再刷)
+(async () => {
+  const getVer = async () => {
+    try {
+      const j = await (await fetch('/api/ver', { headers: { 'X-Token': token } })).json();
+      return (j && j.ver) || '';
+    } catch (e) { return null; }
+  };
+  const ver = await getVer();
+  if (!ver) return;
+  window.__CLIENT_VER = ver;
+  api('/api/cmd', { cmd: 'client_info', ver: ver, ua: navigator.userAgent.slice(0, 60) }).catch(() => { });   // 上报: 服务端日志可见每台客户端的版本
+  let lastEdit = 0;
+  textEl.addEventListener('input', () => { lastEdit = Date.now(); });
+  setInterval(async () => {
+    if (document.visibilityState !== 'visible') return;   // 页面后台: 暂停
+    if (composing || Date.now() - lastEdit < 5000) return; // 打字中: 稍后再刷
+    try {
+      const v = await getVer();
+      if (v && v !== ver) location.reload();               // 页面已更新: 自动刷新
+    } catch (e) { }
+  }, 30000);
+})();
+</script>
+</body>
+</html>

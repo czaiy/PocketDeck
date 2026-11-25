@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Fixture Main — 语义导航测试台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, "Segoe UI", sans-serif; background: #16181d; color: #e6e6e6; }
+  #topbar { position: sticky; top: 0; height: 56px; display: flex; align-items: center; gap: 10px;
+            padding: 0 14px; background: #22252c; border-bottom: 1px solid #333; z-index: 5; }
+  #sidebar { position: fixed; top: 56px; bottom: 0; left: 0; width: 180px; background: #1b1e24;
+             padding: 12px; border-right: 1px solid #2a2e36; display: flex; flex-direction: column; gap: 8px; }
+  main { margin-left: 180px; padding: 20px 24px 160px; }
+  #composer { position: fixed; left: 180px; right: 0; bottom: 0; background: #1f232a;
+              border-top: 1px solid #333; padding: 10px 16px; display: flex; gap: 8px; align-items: center; }
+  #composer textarea { flex: 1; min-height: 44px; background: #12151a; color: #eee;
+                       border: 1px solid #3a4048; border-radius: 8px; padding: 8px; resize: none; }
+  button { background: #2c313a; color: #eee; border: 1px solid #444b55; border-radius: 6px; padding: 6px 12px; }
+  button:hover { background: #39404b; }
+  .para { color: #9aa3ad; margin: 10px 0; }
+  .hidden { display: none; }
+  .occluded-wrap { position: relative; margin: 12px 0; }
+  .occluded-wrap .cover { position: absolute; inset: 0; background: rgba(0,0,0,.85); z-index: 2; }
+  .link { color: #6cb6ff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+  #dialog { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+            background: rgba(0,0,0,.6); z-index: 20; }
+  #dialog .card { background: #23272e; border: 1px solid #3d434d; border-radius: 10px;
+                  padding: 18px; width: 380px; display: flex; flex-direction: column; gap: 10px; }
+  #toast { position: fixed; top: 64px; right: 12px; background: #2d5f3a; color: #d6ffe2;
+           padding: 6px 10px; border-radius: 6px; display: none; z-index: 30; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <button id="btn-home">首页</button>
+  <input id="search" type="search" placeholder="搜索" style="width:280px;padding:6px;background:#12151a;color:#eee;border:1px solid #3a4048;border-radius:6px">
+  <button id="btn-bell">通知</button>
+  <span class="para" style="margin:0">顶栏里的说明文字不是控件</span>
+  <button id="btn-menu" aria-haspopup="menu">菜单</button>
+</div>
+
+<nav id="sidebar">
+  <button id="nav-new">新建会话</button>
+  <button id="nav-list">会话列表</button>
+  <button id="nav-set">设置</button>
+  <a class="link" href="#x" id="side-link">侧栏链接</a>
+  <div class="para">侧栏说明文字</div>
+</nav>
+
+<main>
+  <h1>主区标题（不可导航）</h1>
+  <p class="para">这段正文是纯文本段落，方向键永远不应该停在它上面。</p>
+
+  <div class="row">
+    <button id="m-1">卡片 1</button>
+    <button id="m-2">卡片 2</button>
+    <button id="m-3">卡片 3</button>
+  </div>
+
+  <div class="row">
+    <button id="m-4" disabled>禁用按钮</button>
+    <button id="m-5" class="hidden">隐藏按钮</button>
+    <button id="m-6" style="visibility:hidden">不可见按钮</button>
+  </div>
+
+  <div class="occluded-wrap">
+    <button id="m-7">被遮挡的按钮</button>
+    <div class="cover"></div>
+  </div>
+
+  <div class="row">
+    <label><input type="checkbox" id="m-check"> 选项 A</label>
+    <label><input type="radio" name="r" id="m-radio"> 单选 B</label>
+    <select id="m-sel"><option>下拉一</option><option>下拉二</option></select>
+    <input type="range" id="m-range" min="0" max="10">
+  </div>
+
+  <div class="row" id="dynamic-slot"></div>
+
+  <p class="para">下面这一行是正文里的蓝色链接，不在顶栏/侧栏，按规范不应进入候选：
+    <a class="link" href="#a" id="body-link-1">正文链接 1</a>
+    <a class="link" href="#b" id="body-link-2">正文链接 2</a>
+  </p>
+
+  <div class="row">
+    <button id="btn-dialog">打开弹窗</button>
+    <button id="btn-toast">显示提示</button>
+    <button id="btn-insert">动态插入按钮</button>
+  </div>
+
+  <div class="row" id="far-row" style="margin-top:900px">
+    <button id="far-1">很远的按钮（需要滚动）</button>
+  </div>
+
+  <div id="dialog">
+    <div class="card" role="dialog" aria-modal="true" aria-label="确认对话框">
+      <h2 style="margin:0">确认操作</h2>
+      <input id="dlg-input" type="text" placeholder="输入点什么" style="padding:6px;background:#12151a;color:#eee;border:1px solid #3a4048;border-radius:6px">
+      <div class="row">
+        <button id="dlg-cancel">取消</button>
+        <button id="dlg-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast">已保存</div>
+</main>
+
+<div id="composer">
+  <button id="c-attach" title="附件">附件</button>
+  <button id="c-tool" title="工具">工具</button>
+  <textarea id="c-input" placeholder="输入消息…"></textarea>
+  <button id="c-voice" title="语音">语音</button>
+  <button id="c-send" title="发送">发送</button>
+</div>
+
+<script>
+  var dlg = document.getElementById('dialog');
+  document.getElementById('btn-dialog').onclick = function () {
+    dlg.style.display = 'flex';
+    document.getElementById('dlg-input').focus();
+  };
+  document.getElementById('dlg-cancel').onclick = function () { dlg.style.display = 'none'; };
+  document.getElementById('dlg-ok').onclick = function () { dlg.style.display = 'none'; };
+  document.getElementById('btn-toast').onclick = function () {
+    var t = document.getElementById('toast');
+    t.style.display = 'block';
+    setTimeout(function () { t.style.display = 'none'; }, 1500);
+  };
+  var n = 0;
+  document.getElementById('btn-insert').onclick = function () {
+    n += 1;
+    var b = document.createElement('button');
+    b.textContent = '动态按钮 ' + n;
+    b.id = 'dyn-' + n;
+    document.getElementById('dynamic-slot').appendChild(b);
+  };
+  // 记录最后一次聚焦的控件 id: 自动化测试用它断言「焦点落在谁身上」
+  window.__lastFocus = '';
+  document.addEventListener('focusin', function (e) {
+    window.__lastFocus = (e.target && (e.target.id || e.target.tagName)) || '';
+  });
+</script>
+</body>
+</html>

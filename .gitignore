@@ -1,0 +1,25 @@
+# 运行时生成的敏感/本地文件
+token.txt
+server.log
+server.log.*.tmp
+focus_profiles.json
+focus_pos.json
+
+# 备份与调试产物
+*.bak
+*.pyc
+__pycache__/
+
+# 本地运行环境
+.venv/
+
+# 测试浏览器配置(体积大且含本地数据)
+tests/chrome-profile/
+tests/edge-profile/
+tests/*-profile/
+
+# 系统杂项
+Thumbs.db
+desktop.ini
+tests/*_err.log
+tests/*_out.log

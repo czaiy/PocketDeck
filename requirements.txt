@@ -1,0 +1,8 @@
+pyautogui>=0.9.54
+pyperclip>=1.9
+pynput>=1.7.6
+qrcode>=7.4
+pillow>=10.0
+uiautomation>=2.0
+# Chromium DevTools Protocol 客户端: 网页语义导航层(CDP DOM)用
+websocket-client>=1.7
