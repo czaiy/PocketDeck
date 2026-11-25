@@ -3584,12 +3584,16 @@ def _spatial_rank(start_rect, cands, direction, k=SPATIAL_TOPK,
         # 横向 overflow 排除: 轮播图在窗口外, 物理不可达
         if trect and (rect[2] <= trect[0] or rect[0] >= trect[2]):
             continue
-        # 水平移动: 严格同行约束, 防止斜向跳行
+        # 水平移动: 区域锁模式严格同行; 跨区自由模式允许斜向邻区目标
         if not vertical:
             start_h = max(1.0, b1 - t1)
             drift = abs(side_center) / start_h
             if drift > 1.0:
-                continue   # 超过 1 倍自身高度: 不同行, 不是水平方向的"下一个"
+                if not free:
+                    continue   # 超过 1 倍高度视为不同行
+                # 跨区仍限制在约 72° 方向锥内, 避免斜跳到页面角落
+                if side > 0 and abs(side_center) > max(fwd * 3.0, start_h * 2.5):
+                    continue
         # 垂直移动: 用宽松的方向锥(60°), 允许较大水平偏移
         else:
             if side > 0 and abs(side_center) > fwd * 1.73:
@@ -3713,7 +3717,7 @@ def _spatial_zone_first_impl(zone=None, profile=None):
 
 def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                       zone=None, mode=None):
-    """方向键移动焦点; 专职 UIA 线程内执行。返回 (label, rect 或 None, moved)。
+    """方向键移动焦点; 专职 UIA 线程内执行。返回 (label, rect 或 None, moved, actual_zone)。
     快路径像 Tab 键: 起点复用缓存焦点元素(省 GetFocusedControl), SetFocus+轻验证
     立即返回。候选走缓存(TTL 2s/同窗口); TopK 试链逐个 SetFocus+验证, 不可聚焦/
     已消失的自动落到次优; 滚动补偿按焦点矩形差值平移缓存, 连按翻页几何不漂移。
@@ -3726,11 +3730,11 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
     free = (mode == "free") or not zone
     target = _SPATIAL_CACHE["target"]
     if not target:
-        return ("", None, False)
+        return ("", None, False, zone or "")
     fg = _spatial_fg_for(target)
     if fg is None:
         _SPATIAL_CACHE["target"] = None   # 目标窗口已关闭: 遥控失效, 待下次开启重定位
-        return ("", None, False)
+        return ("", None, False, zone or "")
     # Raw/Spatial 智能判定: 只认「真可编辑」——普通 Edit(非只读)或编辑器特征
     # (contenteditable/prosemirror/tiptap 等, 见 FOCUS_EDITOR_HINTS)。
     # 不再用「带 TextPattern」判定: 只读文本区(消息正文/文章)也带 TP, 按它判会
@@ -3740,7 +3744,12 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
         editable, flabel = _spatial_editable_focus(fok[0])
         if editable:
             _srv_tap(direction)   # 原样发物理方向键: 移文字光标/滚动页面
-            return (f"[文本区·方向键] {flabel}", None, True)
+            try:
+                frect = _spatial_rect(fok[0])
+                fzone = _uia_zone_of(frect, profile, flabel, _ct_name(fok[0])) if frect else zone
+            except Exception:
+                fzone = zone
+            return (f"[文本区·方向键] {flabel}", None, True, fzone or "")
     start_rect = None
     focus_entry = _SPATIAL_CACHE.get("focus")
     if focus_entry:
@@ -3764,7 +3773,7 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 wr = fg.BoundingRectangle
                 cx, cy = (wr.left + wr.right) / 2.0, (wr.top + wr.bottom) / 2.0
             except Exception:
-                return ("", None, False)
+                return ("", None, False, zone or "")
             start_rect = (cx - 1, cy - 1, cx + 1, cy + 1)
     if _SPATIAL_CACHE.pop("stale", False):
         items, cached = _spatial_candidates_impl(target, force=True, profile=profile)
@@ -3818,7 +3827,8 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 label = f"{label}｜弹层内·返回键关闭"
             if DRY:
                 log(f"DRYRUN 空间导航 {direction} -> {label} rect={rect}")
-                return (label, rect, True)   # 不动真焦点, 便于验证几何
+                actual_zone = "DIALOG" if limit is not None else _uia_zone_of(rect, profile, label, ct)
+                return (label, rect, True, actual_zone)   # 不动真焦点, 便于验证几何
             try:
                 ctrl.SetFocus()
             except Exception:
@@ -3840,11 +3850,13 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 _SPATIAL_CACHE["focus"] = (ctrl, nrect, None)   # 下一键的起点; _hl_tick 会补 rid
                 _spatial_focus_feedback(nrect)   # 选中效果: 鼠标悬停 + 原生 focus ring
                 FOCUS_BOX.show(nrect)
-                return (label, nrect, True)
+                actual_zone = "DIALOG" if limit is not None else _uia_zone_of(nrect, profile, label, ct)
+                return (label, nrect, True, actual_zone)
             _SPATIAL_CACHE["focus"] = (ctrl, rect, None)
             _spatial_focus_feedback(rect)
             FOCUS_BOX.show(rect)
-            return (label, rect, True)
+            actual_zone = "DIALOG" if limit is not None else _uia_zone_of(rect, profile, label, ct)
+            return (label, rect, True, actual_zone)
         if attempt == 0:
             now = time.time()
             if now - _SPATIAL_CACHE.get("last_rescan", 0.0) < 1.0:
@@ -3864,7 +3876,7 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
     # 软区域回退: 区域内到边(zone-end)时, 用全池(free)再找一次最近的元素。
     # 这样方向键永远有响应, 不会卡在区域边界上——用户感知是"自然过渡到相邻区域",
     # 而不是"死区/卡住"。弹层内不回退(弹层必须限定)。
-    if not eff_free and eff_zone != "DIALOG" and _SPATIAL_CACHE.get("last_reason") == "zone-end":
+    if not eff_free and eff_zone != "DIALOG" and _SPATIAL_CACHE.get("last_reason") in ("zone-end", "zone-empty"):
         fallback = _spatial_rank(start_rect, items, direction,
                                  profile=profile, zone=None, free=True)
         for score, ctrl, ct, rect in fallback:
@@ -3874,7 +3886,7 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 label = ct
             if DRY:
                 log(f"DRYRUN 软区域回退 {direction} -> {label} rect={rect}")
-                return (label, rect, True)
+                return (label, rect, True, _uia_zone_of(rect, profile, label, ct))
             try:
                 ctrl.SetFocus()
             except Exception:
@@ -3894,13 +3906,13 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 _spatial_focus_feedback(nrect)
                 FOCUS_BOX.show(nrect)
                 _SPATIAL_CACHE["last_reason"] = None
-                return (label, nrect, True)
+                return (label, nrect, True, _uia_zone_of(nrect, profile, label, ct))
             _SPATIAL_CACHE["focus"] = (ctrl, rect, None)
             _spatial_focus_feedback(rect)
             FOCUS_BOX.show(rect)
             _SPATIAL_CACHE["last_reason"] = None
-            return (label, rect, True)
-    return ("", None, False)
+            return (label, rect, True, _uia_zone_of(rect, profile, label, ct))
+    return ("", None, False, zone or "")
 
 
 def _spatial_activate_impl():
@@ -3940,7 +3952,7 @@ def _spatial_activate_impl():
 def _spatial_enter_impl(target, profile=None, zone=None):
     """遥控模式开启: 记录遥控目标窗口并重扫候选, 聚焦目标区域内第一个视口内候选。
     不沿用「当前焦点」当起点——实测它可能落在浏览器标签栏上(chrome UI),
-    从那里按 down 会一竿子插到页面底部。返回 (label, rect) 或 None。
+    从那里按 down 会一竿子插到页面底部。返回 (label, rect, actual_zone) 或 None。
     zone 非空时只在该区域选初始落点(区域优先: COMPOSER/SEARCH 先于 MAIN)。
     专职 UIA 线程内执行"""
     _SPATIAL_CACHE["target"] = target
@@ -3980,7 +3992,7 @@ def _spatial_enter_impl(target, profile=None, zone=None):
         key = (cr[0] - vrect[0] if vrect else cr[0]) + (cr[1] - vrect[1] if vrect else cr[1])
         ranked0.append((key, ctrl, ct, cr))
     if not ranked0 and zone:
-        # 目标区域空: 退到整窗口, 但保持区域标记不变(下一次按键仍按区域锁评分)
+        # 目标区域空: 退到整窗口, 并以实际落点区域恢复导航状态
         for ctrl, ct, _name, cr, _focusable in items:
             if vrect:
                 l, t, r, b = cr
@@ -3998,7 +4010,7 @@ def _spatial_enter_impl(target, profile=None, zone=None):
             label = ct
         if DRY:
             log(f"DRYRUN 遥控初始焦点 -> {label} rect={cr}")
-            return (label, cr)
+            return (label, cr, _uia_zone_of(cr, profile, label, ct))
         try:
             ctrl.SetFocus()
         except Exception:
@@ -4006,7 +4018,7 @@ def _spatial_enter_impl(target, profile=None, zone=None):
         if not _focus_verify_retry(ctrl):
             continue   # 初始候选验证失败(窗口刚切换 a11y 未同步等): 试下一个
         _SPATIAL_CACHE["focus"] = (ctrl, cr, None)
-        return (label, cr)
+        return (label, cr, _uia_zone_of(cr, profile, label, ct))
     return None
 
 
@@ -4435,4 +4447,28 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import traceback as _tb
+    try:
+        main()
+    except OSError as e:
+        if getattr(e, "winerror", None) == 10048:   # 端口被占用: 双实例, 提示后原样退出
+            log(f"启动失败: 端口 {PORT} 已被占用(是否已有实例在运行?)")
+            print(f"[KZQ] 端口 {PORT} 已被占用, 请勿重复启动(已有实例在运行)")
+            raise SystemExit(2)
+        log(f"服务退出(OSError): {e}")
+        log(_tb.format_exc())
+        print(_tb.format_exc(), file=sys.stderr)
+        raise
+    except SystemExit as e:
+        log(f"服务退出: sys.exit({e.code})")
+        raise
+    except KeyboardInterrupt:
+        log("服务停止: Ctrl+C / 关闭窗口")
+        raise
+    except BaseException:
+        log("=" * 52)
+        log("服务崩溃(未捕获异常), 堆栈如下:")
+        log(_tb.format_exc())
+        log("=" * 52)
+        print(_tb.format_exc(), file=sys.stderr)
+        raise
