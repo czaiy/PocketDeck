@@ -8,7 +8,7 @@
 
 浏览器需要以调试端口启动：
   msedge.exe --remote-debugging-port=9222 --user-data-dir=... 
-或 chrome.exe 同上。项目根目录 start_debug_browser.bat 已封装。
+或 chrome.exe 同上。
 """
 
 from __future__ import annotations

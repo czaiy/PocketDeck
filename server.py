@@ -2473,7 +2473,7 @@ def _focus_read_clipboard() -> str:
 
 # ---- Chromium CDP 通道: DSH/Edge/Chrome 开调试端口时的"Win32 等价物" ----
 # 毫秒级读写文本+光标(selectionStart/End), 与记事本的 EM_SETSEL 同级; 无 UIA 超时/僵死。
-# DSH 建议用 start_dsh_cdp.bat 启动(--remote-debugging-port=9223); 未开端口时自动回退 UIA。
+# 未开端口时自动回退 UIA。
 _CDP_PORT_CANDIDATES = (9223, 9224, 9225, 9222)   # DSH=9223 豆包=9224 豆包工作=9225 兼容浏览器调试口 9222
 _CDP_LOCK = threading.Lock()
 _CDP = {"conns": {}, "fail_ts": 0.0, "mid": 0}

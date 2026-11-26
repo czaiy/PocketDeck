@@ -96,17 +96,18 @@
 
 网页语义层需要浏览器调试端口，普通方式启动的浏览器没有：
 
-1. 双击 `start_debug_browser.bat`（用独立 `--user-data-dir`，不碰日常 Chrome 配置，也不用关掉已开的浏览器）
+1. 手动启动带调试端口的浏览器，例如：
+   ```powershell
+   & "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="$env:TEMP\kzq-chrome-debug" --no-first-run --no-default-browser-check "https://www.google.com"
+   ```
 2. 确认端口就绪：`curl http://127.0.0.1:9222/json/version`
 3. 之后在这个浏览器窗口里操作，方向键走 DOM 语义层
 
 不开也能用：服务自动走 UIA 层，行为一致（区域锁、同行约束、编辑态让权都生效），只是控件名字没有 DOM 那么准。
 
-**浏览器闪退排查**（脚本本身的坑，已修）：
+**浏览器闪退排查**：
 
-- `.bat` 必须存成 **CRLF 行尾 + 纯 ASCII**。UTF-8 中文注释在 `chcp 65001` 生效之前就被 cmd 按 GBK 读，会把字节拆成命令片段，整个脚本从第一处中文注释起就崩——表现就是双击后窗口一闪。
-- `if` 块里的 `set VAR=` + `%VAR%` 拿不到值（解析期展开），会把空路径传给 `start`。脚本已改成 `goto` 分支，每个分支写完整命令行。
-- 同一个 `--user-data-dir` 只能被一个 Chrome 实例占用。上次开着的窗口没关就再运行，新的会立刻退出——先关掉旧窗口。
+- 同一个 `--user-data-dir` 只能被一个 Chrome 实例占用。上次开着的窗口没关就再启动，新的会立刻退出——先关掉旧窗口。
 - 目录路径含中文/特殊字符也可能导致参数解析失败，必要时把项目移到纯英文路径。
 
 ### 站点 Profile
@@ -117,7 +118,7 @@
 
 ```bash
 python tests/fixture_server.py 9751          # 本地 fixture 页面
-start_debug_browser.bat http://127.0.0.1:9751/main.html
+# 手动启动 Chrome/Edge 调试浏览器后访问 http://127.0.0.1:9751/main.html
 .venv\Scripts\python.exe tests\test_nav.py   # 34 项语义/区域/弹窗/编辑态/100连按
 ```
 

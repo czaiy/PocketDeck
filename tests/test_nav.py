@@ -72,7 +72,7 @@ class Page:
 def main():
     cdp = CDPManager()
     if not cdp.available():
-        print("CDP 不可用: 先用 tests/start_debug_browser.bat 启动调试浏览器")
+        print("CDP 不可用: 先手动启动带 --remote-debugging-port=9222 的调试浏览器")
         return 2
     pg = Page(cdp)
 
