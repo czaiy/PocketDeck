@@ -154,18 +154,19 @@ h4 { margin:0; padding:12px 14px 0; font-size:12px; color:var(--sub); font-weigh
 #padWheel.expand.arm { background:linear-gradient(to right, var(--acc-soft), transparent); }   /* 武装/提示: 整列淡渐变, 深端贴内侧线 */
 #padWheel.expand .bar { display:none; }
 
-/* 遥控面板 (浮层: 与常用键同款玻璃 + 同高 grid 3×3/44px 按钮, 浮在触控板上方不占满) */
-#remote { position:absolute; top:8px; left:8px; right:8px; background:var(--glass-bg);
+/* 遥控/常用键共用玻璃浮层: 同款容器、同高三行网格、44px 按钮 */
+#remote, #keypop { position:absolute; top:8px; left:8px; right:8px; background:var(--glass-bg);
   -webkit-backdrop-filter:blur(10px) saturate(180%) var(--glass-boost); backdrop-filter:blur(10px) saturate(180%) var(--glass-boost);
   border:1px solid var(--glass-edge); border-radius:6px; padding:12px 0; display:none; z-index:5;
   box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-gloss), inset 0 0 0 1px var(--glass-rim);
   overflow:hidden; }
-#remote.show { display:block; }
-#remote .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:0 12px; }
-#remote .grid button { height:44px; font-size:13px; display:flex; align-items:center; justify-content:center; gap:6px; }
+#remote.show, #keypop.show { display:block; }
+#remote .grid, .keypage .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+#remote .grid { margin:0 12px; }
+#remote .grid button, .keypage .grid button { height:44px; font-size:13px; }
+#remote .grid button { display:flex; align-items:center; justify-content:center; gap:6px; }
 #remote .grid [data-rdir] { font-size:17px; }
-/* 导航状态条: 当前区域 + 当前控件名 + 导航模式 —— 电视遥控的「现在选到哪」
-   信息必须一直可见, 否则用户按方向键时完全不知道焦点在哪 */
+/* 状态条与高级按钮保留 DOM/JS，三行遥控主面板默认隐藏 */
 #navStatus { display:flex; align-items:center; gap:8px; margin:0 12px 10px; min-height:24px;
   font-size:12px; line-height:1.2; }
 #navStatus .nav-chip { flex:none; padding:3px 8px; border-radius:4px; background:rgba(56,165,255,.18);
@@ -176,21 +177,14 @@ h4 { margin:0; padding:12px 14px 0; font-size:12px; color:var(--sub); font-weigh
 #remote .grid.nav-extra { margin-top:8px; grid-template-columns:repeat(4,1fr); }
 #remote .grid.nav-extra button { height:34px; font-size:12px; }
 #remote .grid.nav-extra button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+#remote #navStatus, #remote .grid.nav-extra { display:none; }
 #btnROK { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
 /* 手型图标(拖拽): 内联 SVG 走 currentColor, 深浅主题自动适配 (Lucide hand, ISC) */
 .hand-ico { width:16px; height:16px; flex:none; }
 
-/* 常用键弹出面板 (真玻璃浮层; 同心圆法则: 外框14 - 内距8 = 内圆角6) */
-#keypop { position:absolute; top:8px; left:8px; right:8px; background:var(--glass-bg);
-  -webkit-backdrop-filter:blur(10px) saturate(180%) var(--glass-boost); backdrop-filter:blur(10px) saturate(180%) var(--glass-boost);
-  border:1px solid var(--glass-edge); border-radius:6px; padding:12px 0; display:none; z-index:5;
-  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-gloss), inset 0 0 0 1px var(--glass-rim);
-  overflow:hidden; }
-#keypop.show { display:block; }
+/* 常用键页面: 左右留白放在页内，滑动时后续页面完全裁在边界外 */
 #keypages { display:flex; width:300%; transition:transform .22s ease; }
-.keypage { width:33.3333%; padding:0 12px; }  /* 页内左右留白; 水平留白放页内才能把后面的页完全裁在边界外 */
-.keypage .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
-.keypage .grid button { height:44px; font-size:13px; }
+.keypage { width:33.3333%; padding:0 12px; }
 
 /* 底部弹层 (真玻璃, 左右两页翻页: 同常用键的滑动切页模式) */
 #sheetWrap { position:fixed; inset:0; z-index:10; visibility:hidden; transition:visibility 0s linear .22s; }

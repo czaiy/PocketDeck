@@ -307,7 +307,8 @@ class NavEngine:
                         self.zone = z
                         break
             if res:
-                label, rect = res[0], res[1]
+                label, rect, actual_zone = res
+                self.zone = actual_zone or self.zone
                 self.current_name = label or ""
                 self.current_rect = rect
                 self.current_zone = self.zone
@@ -438,13 +439,14 @@ class NavEngine:
         res = self.uia.nav(direction, self.profile, self.zone, force)
         if not res:
             return self._status(f"{self.zone} 区该方向已到边缘", moved=False)
-        label, rect, moved = res
+        label, rect, moved, actual_zone = res
         if not moved:
             return self._status("该方向没有更多元素", moved=False)
+        zone = actual_zone or self.zone
         self._apply_moved({
-            "id": "", "key": f"uia:{self.zone}:{label}:{int((rect or [0])[0])}:{int((rect or [0, 0])[1])}",
-            "name": label, "zone": self.zone, "screen": rect, "editing": self.uia.editing(),
-            "from_uia": True,
+            "id": "", "key": f"uia:{zone}:{label}:{int((rect or [0])[0])}:{int((rect or [0, 0])[1])}",
+            "name": label, "zone": zone, "screen": rect, "editing": self.uia.editing(),
+            "from_uia": True, "moved": True,
         })
         return self._status(f"→ {label}")
 
