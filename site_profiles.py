@@ -72,6 +72,9 @@ _GENERIC = {
     },
     "zone_priority": ["DIALOG", "COMPOSER", "SEARCH", "PLAYER", "TOPBAR", "SIDEBAR", "MAIN"],
     "link_zones": ["TOPBAR", "SIDEBAR"],
+    # 内容卡片整卡选择器: 命中的容器整块算一个候选(按 OK 打开),
+    # 卡片内部的小字/频道/菜单一律不收。简单控制: 只选大目标。
+    "card_selectors": [],
     "allow_selectors": ["[role=tab]", "[role=menuitem]", "[role=option]"],
     "deny_selectors": [
         # 只留「确定不是控件」的: 隐藏/禁用/广告容器。
@@ -292,6 +295,9 @@ PROFILES: List[Dict[str, Any]] = [
         zone_priority=["DIALOG", "SEARCH", "PLAYER", "TOPBAR", "SIDEBAR", "MAIN"],
         # MAIN 不收链接: 视频卡片/推荐链接不是遥控目标
         link_zones=["TOPBAR", "SIDEBAR"],
+        # 视频整卡一个候选: 方向键在卡与卡之间走, 不进卡内小字
+        card_selectors=["ytd-rich-item-renderer", "ytd-video-renderer",
+                        "ytd-compact-video-renderer", "ytd-grid-video-renderer"],
         allow_selectors=["yt-chip-cloud-chip-renderer", "button[aria-label*='Search' i]"],
         deny_selectors=_GENERIC["deny_selectors"] + [
             "ytd-comment-thread-renderer a", "#comments a",
@@ -361,6 +367,8 @@ PROFILES: List[Dict[str, Any]] = [
         zone_priority=["DIALOG", "SEARCH", "PLAYER", "COMPOSER", "TOPBAR", "SIDEBAR", "MAIN"],
         # MAIN 不收链接: 视频卡片链接不是遥控目标
         link_zones=["TOPBAR", "SIDEBAR"],
+        # 视频整卡一个候选: 方向键在卡与卡之间走, 不进卡内小字
+        card_selectors=[".bili-video-card", ".video-card", ".feed-card"],
         deny_selectors=_GENERIC["deny_selectors"] + [
             ".reply-item a", ".comment a",
             # 视频卡片和评论区操作按钮
@@ -387,7 +395,8 @@ PROFILES: List[Dict[str, Any]] = [
         id="douyin",
         name="抖音",
         url_patterns=[r"(^|[./])douyin\.com", r"(^|[./])iesdouyin\.com"],
-        default_zone="SEARCH",
+        # 默认进视频流(MAIN), 不进搜索框——进门落在搜索框会被编辑态吞方向键(真机实证)
+        default_zone="MAIN",
         zones={
             "TOPBAR": ["header", "[role=banner]", ".header"],
             "SIDEBAR": ["nav", "[role=navigation]", ".sidebar"],
@@ -401,6 +410,8 @@ PROFILES: List[Dict[str, Any]] = [
         zone_priority=["DIALOG", "SEARCH", "PLAYER", "COMPOSER", "TOPBAR", "SIDEBAR", "MAIN"],
         # MAIN 不收链接: 视频卡片链接不是遥控目标
         link_zones=["TOPBAR", "SIDEBAR"],
+        # 视频整卡一个候选: 方向键在卡与卡之间走, 不进卡内小字
+        card_selectors=["[data-e2e=video-card]", ".recommend-video"],
         deny_selectors=_GENERIC["deny_selectors"] + [
             ".comment a",
             # 推荐流视频卡片
@@ -462,6 +473,7 @@ def profile_for_js(profile: Dict[str, Any]) -> Dict[str, Any]:
         "zones": profile.get("zones") or {},
         "zonePriority": profile.get("zone_priority") or list(ZONES),
         "linkZones": profile.get("link_zones") or [],
+        "cardSelectors": profile.get("card_selectors") or [],
         "allowSelectors": profile.get("allow_selectors") or [],
         "denySelectors": profile.get("deny_selectors") or [],
         "composer": profile.get("composer") or {},

@@ -9,9 +9,9 @@
  *   - 输入框处于编辑态时由服务端把方向键交还应用，本层不抢。
  */
 (function () {
-  if (window.__KZQ_NAV && window.__KZQ_NAV.version >= 3) return;
+  if (window.__KZQ_NAV && window.__KZQ_NAV.version >= 4) return;
 
-  const VERSION = 3;
+  const VERSION = 4;
   const ID_ATTR = 'data-kzq-nav-id';
   const KEY_PROP = '__kzqKey';
   const ID_PROP = '__kzqId';
@@ -460,6 +460,37 @@
     return false;
   }
 
+  // ---- 简单控制: 只选大目标 ----
+  // 内容卡片(视频卡等): 整卡算一个候选, 卡内小字/频道/菜单不收。
+  // 小图标按钮(无可见文字且尺寸小): 不是遥控目标, 直接排除;
+  // 输入区/搜索/弹窗/播放器里的真控件(发送/确认/播放控制)豁免。
+  function cardSelOf(cfg) { return joined((cfg && cfg.cardSelectors) || []); }
+  function isCardEl(el, cfg) {
+    const sel = cardSelOf(cfg);
+    return !!sel && matches(el, sel);
+  }
+  function cardHostOf(el, cfg) {
+    const sel = cardSelOf(cfg);
+    return sel ? closest(el, sel) : null;
+  }
+  const FORM_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'checkbox',
+    'radio', 'switch', 'slider', 'option']);
+  function isTinyIcon(el, r, zone, role, cfg) {
+    if (FORM_ROLES.has(role) || isEditable(el)) return false;
+    if (zone === 'COMPOSER' || zone === 'SEARCH' || zone === 'DIALOG' || zone === 'PLAYER') return false;
+    // Profile 显式允许的选择器(站点主操作)豁免, 不被尺寸误杀
+    const allowSel = joined((cfg && cfg.allowSelectors) || []);
+    if (allowSel && matches(el, allowSel)) return false;
+    const visibleText = norm(el.innerText || '').length;
+    if (visibleText > 0) return false;   // 带文字的是真入口, 不算小图标
+    // 无可见文字: 尺寸小的一律是图标按钮(设置/头像/更多/⋯/稍后再看等)
+    if (r.w <= 44 && r.h <= 44) return true;
+    if (r.h < 28) return true;
+    // 侧边栏更严: 无文字的图标按钮一律不收, 只留带文字的一级入口
+    if (zone === 'SIDEBAR') return true;
+    return false;
+  }
+
   function denied(el, cfg) {
     const sel = joined(cfg.denySelectors || []);
     if (sel && matches(el, sel)) return true;
@@ -509,13 +540,17 @@
       // 链接只有 Profile 指定了 linkZones 才收集: 不配就完全不来, 配了也要再过
       // linkAllowed 的区域判定(正文里的链接、推荐位链接一律不算导航目标)
       ...((cfg.linkZones || []).length ? ['a[href]'] : [])
-    ].concat(cfg.allowSelectors || []));
+    ].concat(cfg.allowSelectors || []).concat(cfg.cardSelectors || []));
     if (!sels) return { candidates: [], zones: {}, dialog: false, error: 'no-selectors' };
 
     const raw = [];
     for (const el of qsa(sels)) {
-      const role = roleOf(el);
+      // 内容卡片容器本身没有 ARIA role, 按 link 收(整卡一个候选, OK 打开)
+      const isCard = isCardEl(el, cfg);
+      const role = isCard ? 'link' : roleOf(el);
       if (!role || !WL.has(role)) { REJECT.role++; why(el, 'role:' + role); continue; }
+      // 卡片内部元素(标题小字/频道/时长/菜单)不收: 焦点只停整卡
+      if (!isCard && cardHostOf(el, cfg)) { REJECT.role++; why(el, 'card-inner'); continue; }
       if (denied(el, cfg)) { REJECT.role++; why(el, 'denied:' + (deniedWhy(el, cfg) || '?')); continue; }
       const r = rectOf(el);
       if (!styleVisible(el, r)) { REJECT.hidden++; why(el, 'hidden'); continue; }
@@ -529,7 +564,8 @@
         if (r.t > innerHeight + reach || r.b < -reach) { REJECT.viewport++; why(el, 'far'); continue; }
       }
       const zone = zoneOf(el, cfg, r);
-      if (role === 'link' && !linkAllowed(el, cfg, zone)) { REJECT.role++; why(el, 'link-denied:' + zone); continue; }
+      // 整卡候选是 Profile 显式指定的, 不走 linkZones 区域限制
+      if (role === 'link' && !isCard && !linkAllowed(el, cfg, zone)) { REJECT.role++; why(el, 'link-denied:' + zone); continue; }
       if (dialogOnly && zone !== 'DIALOG') { REJECT.zone++; why(el, 'dialog-fence'); continue; }
       if (wantZone && zone !== wantZone && !dialogOnly) { REJECT.zone++; why(el, 'zone:' + zone); continue; }
       if (covered(el, r)) { REJECT.occluded++; why(el, 'occluded'); continue; }
@@ -543,6 +579,8 @@
       // 页脚/角落的行政信息与辅助图标: 不是用户想遥控的内容
       const noise = isNoise(el, r, name, zone);
       if (noise && !isEditable(el)) { REJECT.role++; why(el, 'noise:' + noise); continue; }
+      // 简单控制: 小图标按钮不收(整卡候选除外, 它是大目标)
+      if (!isCard && isTinyIcon(el, r, zone, role, cfg)) { REJECT.role++; why(el, 'tiny-icon'); continue; }
       const g = groupOf(el, cfg);
       if (trace) {
         window.__KZQ_REJECTS.push({
@@ -554,7 +592,7 @@
         });
       }
       raw.push({ el, role, name, zone, rect: r, group: g.group,
-                 groupIndex: g.groupIndex, offscreen });
+                 groupIndex: g.groupIndex, offscreen, isCard });
     }
 
     // 去重 1：嵌套的同类语义元素（textarea 包在 role=textbox 里、图标包在 button 里）
@@ -618,6 +656,7 @@
       const before = kept.length;
       const trimmed = kept.filter((c) => {
         if (!dense.has(c.zone)) return true;
+        if (c.isCard) return true;   // 整卡候选是主目标, 密度剥离不碰
         if (c.role === 'link') {
           // 链接是内容卡片(含图片/视频/时长/播放量): 不是遥控目标
           if (isContentCard(c.el)) return false;
@@ -645,7 +684,7 @@
         zone: c.zone, group: c.group, groupIndex: c.groupIndex,
         rect: c.rect, center: { x: cx(c.rect), y: cy(c.rect) },
         screen: screenRect(c.rect), editable: isEditable(c.el),
-        offscreen: !!c.offscreen
+        offscreen: !!c.offscreen, isCard: !!c.isCard
       });
     }
     return {
@@ -1020,8 +1059,14 @@
     const el = (id && findById(id)) || ae;
     if (!el || !el.isConnected) return { ok: false, reason: 'stale' };
     try {
-      el.click();
-      return { ok: true, role: roleOf(el), name: (nameOf(el, roleOf(el)) || '').slice(0, 60) };
+      // 整卡候选: 点卡内主链接(缩略图/标题)才打开, 点容器本身没反应
+      let target = el;
+      if (isCardEl(el, cfg)) {
+        target = el.querySelector('a#thumbnail, a[href*="/watch"], a[href*="/video/"], a[href]') || el;
+      }
+      target.click();
+      const role = isCardEl(el, cfg) ? 'link' : roleOf(el);
+      return { ok: true, role, name: (nameOf(el, role) || '').slice(0, 60) };
     } catch (e) {
       return { ok: false, reason: String(e && e.message || e) };
     }
