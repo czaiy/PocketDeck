@@ -1028,6 +1028,9 @@ KEY_WHITELIST = {
     "win", "alt", "ctrl", "shift",
     "volumeup", "volumedown", "volumemute",
     "playpause", "nexttrack", "prevtrack",
+    # 视频站播放器快捷键(抖音 H 全屏/Z 点赞/X 评论/C 收藏/Shift± 音量等)
+    "h", "y", "m", "z", "x", "c", "g", "k", "j", "b", "v", "r", "n", "i", "l",
+    "+", "-",
 } | {f"f{i}" for i in range(1, 13)}
 
 COMBO_WHITELIST = {
@@ -1303,12 +1306,23 @@ _HL_TRACK = {"on": False, "rect": None}   # 遥控焦点追踪开关(remote_on/o
 
 def _hl_tick() -> None:
     try:
+        # 遥控导航刚发生(2.5s 内)时不跟随真实焦点: 页面会自己移焦点
+        # (抖音切视频时焦点落到 body/播放器), tick 跟着改框就是
+        # 「框不跟随选中、老消失」。遥控的框由 api_remote 按响应 rect 画
+        if time.time() - (_SPATIAL_CACHE.get("last_nav_ts") or 0.0) < 2.5:
+            return
         focused = _UIA_AUTO.GetFocusedControl()
         if focused is None:
             return
         r = focused.BoundingRectangle
         rect = (r.left, r.top, r.right, r.bottom)
         if rect[2] - rect[0] <= 0 or rect[3] - rect[1] <= 0:
+            return
+        # 虚拟焦点保护: 刚接受虚拟焦点 2 秒内, 真实焦点在别处不覆盖缓存/框,
+        # 否则虚拟选中立刻被真实焦点(页面自动聚焦的输入框等)顶掉
+        _fts = _SPATIAL_CACHE.get("focus_ts") or 0.0
+        _fok = _SPATIAL_CACHE.get("focus")
+        if _fts and time.time() - _fts < 2.0 and _fok and _fok[1] and tuple(_fok[1]) != tuple(rect):
             return
         trect = _SPATIAL_CACHE.get("target_rect")
         if trect and (rect[2] <= trect[0] or rect[0] >= trect[2]
@@ -1426,6 +1440,7 @@ FOCUS_ALLOWED_TERMS = (
 FOCUS_EDITOR_HINTS = (
     "prosemirror", "tiptap", "contenteditable", "cm-editor", "codemirror",
     "ql-editor", "slate-editor",
+    "richedit",   # 原生 RichEdit(记事本 RichEditD2DPT 等): 真文本编辑器
 )
 # 邻域动作语义: 输入框旁边(同一行)的按钮/图标名命中即 +60 (发送/搜索/创建图标旁的输入框)
 FOCUS_CUE_TERMS = (
@@ -1480,12 +1495,14 @@ def _fg_info():
 _CT_NAMES = None   # {ControlType int: 名称}, 懒构建(仅专职线程触达)
 
 
-def _ct_name(ctrl) -> str:
+def _ct_name(ctrl, cti=None) -> str:
     global _CT_NAMES
-    try:
-        ct = int(ctrl.ControlType)
-    except Exception:
-        return ""
+    if cti is None:
+        try:
+            cti = int(ctrl.ControlType)
+        except Exception:
+            return ""
+    ct = cti
     if _CT_NAMES is None:
         CT = _UIA_AUTO.ControlType
         _CT_NAMES = {int(getattr(CT, n)): n[:-7] for n in dir(CT) if n.endswith("Control")}
@@ -2786,7 +2803,7 @@ def focus_input_entry(name: str) -> "str | dict":
 # 与聚焦输入框层共用专职 UIA 线程。
 
 SPATIAL_MAX_NODES = 2500      # 空间导航单次扫描节点上限
-SPATIAL_CACHE_TTL = 3.0       # 候选缓存有效期(秒): 连按时零扫描, 超时/换窗口才重扫
+SPATIAL_CACHE_TTL = 5.0       # 候选缓存有效期(秒): 连按时零扫描, 超时/换窗口才重扫
 SPATIAL_TOPK = 6              # 每次方向键的试链长度: 最优不行自动试次优
 SPATIAL_SCAN_BUDGET = 2.5     # 单次扫描时间上限(秒): 超时用已有候选, 防大页面卡死
 
@@ -3066,8 +3083,41 @@ class _FocusBox:
         框长期停在"中间插值位置", 用户看到的就是"框追不上焦点/框画在空地上"。
         遥控场景要的是跟手和准确, 不是丝滑 —— 位置永远等于最新焦点矩形。
         """
+        # 无效矩形(零/负尺寸)直接忽略, 保持上一帧——否则框会被画没了(消失)
+        try:
+            _r = tuple(float(v) for v in rect[:4])
+        except Exception:
+            return
+        if _r[2] - _r[0] <= 0 or _r[3] - _r[1] <= 0:
+            log(f"FocusBox 忽略无效矩形 {_r}")
+            return
+        # 诊断: 框画到目标窗口外(候选在折叠下方/矩形过期)时用户看到的是「框不显示」
+        _tr = _SPATIAL_CACHE.get("target_rect")
+        if _tr:
+            _cx, _cy = (_r[0] + _r[2]) / 2.0, (_r[1] + _r[3]) / 2.0
+            if not (_tr[0] <= _cx <= _tr[2] and _tr[1] <= _cy <= _tr[3]):
+                log(f"FocusBox 框在窗口外 rect={_r} win={_tr}")
+        # 大矩形钳制: TG 消息行/大容器整块画框太夸张(863x341), 钳到左上角
+        # 560x140 内——框的作用是标位置, 不是描边整个元素
+        _w, _h = _r[2] - _r[0], _r[3] - _r[1]
+        if _w > 560.0 or _h > 140.0:
+            _r = (_r[0], _r[1], _r[0] + min(_w, 560.0), _r[1] + min(_h, 140.0))
+        # 窗口内钳制: 候选矩形过期/在折叠外时框会画到窗口外, 用户看到
+        # 「框不显示」(实测 rect y=-56..16 整框在窗口上方)。与窗口求交集
+        # 画可见部分; 完全在外则贴窗口边缘画小框, 保证总有框可见
+        if _tr:
+            _il = max(_r[0], float(_tr[0])); _it = max(_r[1], float(_tr[1]))
+            _ir = min(_r[2], float(_tr[2])); _ib = min(_r[3], float(_tr[3]))
+            if _ir - _il >= 8 and _ib - _it >= 8:
+                _r = (_il, _it, _ir, _ib)
+            else:
+                _cx = min(max((_r[0] + _r[2]) / 2.0, float(_tr[0]) + 20),
+                          float(_tr[2]) - 20)
+                _cy = min(max((_r[1] + _r[3]) / 2.0, float(_tr[1]) + 12),
+                          float(_tr[3]) - 12)
+                _r = (_cx - 20, _cy - 12, _cx + 20, _cy + 12)
         self._ensure()
-        self._pending = tuple(float(v) for v in rect[:4])
+        self._pending = _r
         self._cur = self._pending
         self._anim = False
         with self._lock:
@@ -3115,6 +3165,21 @@ def _focus_verify_retry(ctrl, tries: int = 3, gap: float = 0.04) -> bool:
             return True
         if i < tries - 1:
             time.sleep(gap)
+    # 兜底: 焦点落在候选的内层元素上(Chromium 常把焦点给内层 span/div,
+    # 外层 Button 的 HasKeyboardFocus 仍为 False)——真实焦点矩形与候选矩形
+    # 重叠过半即算聚焦成功, 避免试链逐个跳过造成「闪」和选不中
+    try:
+        focused = _UIA_AUTO.GetFocusedControl()
+        if focused is not None:
+            fr = focused.BoundingRectangle
+            cr = ctrl.BoundingRectangle
+            iw = max(0.0, min(float(fr.right), float(cr.right)) - max(float(fr.left), float(cr.left)))
+            ih = max(0.0, min(float(fr.bottom), float(cr.bottom)) - max(float(fr.top), float(cr.top)))
+            area = max(1.0, float(cr.right - cr.left) * float(cr.bottom - cr.top))
+            if iw * ih >= area * 0.5:
+                return True
+    except Exception:
+        pass
     return False
 
 
@@ -3209,26 +3274,80 @@ def _uia_zone_of(rect, profile=None, name: str = "", ct: str = "") -> str:
     l, t, r, b = rect
     low = (name or "").lower()
     pid = (profile or {}).get("id") or "generic"
+    if ct == "PlayerKey":
+        return "MAIN"   # 合成底栏按钮: 播放/暂停 x 落在侧栏几何带内会被误判
+                        # SIDEBAR, 区域锁住后方向键卡在侧栏(实测)
+    # 聊天站侧栏条带(左列): 侧栏顶部的搜索按钮等归 SIDEBAR, 不被 SEARCH/TOPBAR 抢走,
+    # 否则区域锁在 SIDEBAR 时永远选不到它
+    _in_strip = pid in ("chatgpt", "gemini") and l <= wl + min(ww * 0.20, 300.0)
     # 搜索框：语义名优先
-    if any(k in low for k in ("search", "搜索", "查找", "filter")) and t <= wt + wh * 0.28:
+    if not _in_strip and any(k in low for k in ("search", "搜索", "查找", "filter")) and t <= wt + wh * 0.28:
         return "SEARCH"
     # 播放器：视频站点的大面积中央容器 / 控件
     if pid in ("youtube", "bilibili", "douyin"):
         if (r - l) * (b - t) > ww * wh * 0.12 and t >= wt + wh * 0.08:
             return "PLAYER"
+        # 视频封面归正文区: 左边第一列卡片 x 坐标落在侧栏几何带内,
+        # 不先归正文会被误判 SIDEBAR, 卡内小链接跟着被放行
+        if _uia_is_thumb_rect(rect):
+            return "MAIN"
+        # YouTube 标题链接同理: 第一列标题 x 落在侧栏几何带内会被误判 SIDEBAR,
+        # 导致侧栏区域锁混入视频、向下跳侧栏。侧栏导航项(贴窗口左缘 40px 内
+        # 且宽 ≤240)除外——它们尺寸也像标题, 靠贴边+窄宽区分(窄窗口时
+        # 第一列标题离左缘也只有 ~100px, 不能只看距离)
+        if pid == "youtube" and ct == "Hyperlink" and _uia_is_title_rect(rect) \
+                and not ((l - wl) <= 40.0 and (r - l) <= 240.0):
+            return "MAIN"
+    # 聊天站点顶栏: 窄按钮(模型选择等)宽度不够横跨整屏, 不放宽会被划进 MAIN,
+    # 方向键在正文区按着按着就跳到顶部——聊天站顶部没有卡片内容, 直接按高度归顶栏;
+    # 但侧栏条带内的顶部按钮(搜索等)除外, 它们归 SIDEBAR
+    if pid in ("chatgpt", "gemini") and not _in_strip and t <= wt + min(110.0, wh * 0.14):
+        return "TOPBAR"
     # 顶栏
     if t <= wt + min(110.0, wh * 0.14) and (r - l) >= ww * 0.35:
         return "TOPBAR"
     # 侧栏
     if l <= wl + ww * 0.20 and (r - l) <= ww * 0.45:
         return "SIDEBAR"
+    # 输入区定带(扫描时按最宽可编辑元素划定): 中心落在带内即 COMPOSER,
+    # 居中输入框(Gemini/ChatGPT 首页)与贴底输入框都成立
+    _band = _SPATIAL_CACHE.get("composer_band")
+    if _band:
+        _cx = (l + r) / 2.0
+        _cy = (t + b) / 2.0
+        if _band[0] <= _cx <= _band[2] and _band[1] <= _cy <= _band[3]:
+            return "COMPOSER"
+    # 聊天站输入区按底部条带归: 思考/搜索等小药丸按钮宽度不够通用规则的 28%,
+    # 会被划进 MAIN, 区域锁在 COMPOSER 时选不到——底部 28% 条带整体归输入区
+    if pid in ("chatgpt", "gemini") and t >= wt + wh * 0.72:
+        return "COMPOSER"
     # 输入区
     if (b - t) <= wh * 0.30 and t >= wt + wh * 0.55 and (r - l) >= ww * 0.28:
         return "COMPOSER"
     return "MAIN"
 
 
-def _uia_sem_ok(ct, name, zone, profile=None, link_zones=None):
+def _uia_is_thumb_rect(rect):
+    """视频封面尺寸: 大面积横向矩形。标题链接(矮)/头像(小方块)/频道名(矮)
+    都不满足, 靠尺寸就能把「视频窗口」和卡内小字分开。"""
+    if not rect:
+        return False
+    w = float(rect[2] - rect[0])
+    h = float(rect[3] - rect[1])
+    return w >= 150.0 and h >= 80.0 and w * h >= 12000.0
+
+
+def _uia_is_title_rect(rect):
+    """视频标题尺寸: 宽而矮的文字链接(1-2 行)。YouTube 改选标题时用它认锚点;
+    频道名通常更窄, 头像更小, 都不在这个区间。"""
+    if not rect:
+        return False
+    w = float(rect[2] - rect[0])
+    h = float(rect[3] - rect[1])
+    return w >= 120.0 and 14.0 <= h <= 64.0
+
+
+def _uia_sem_ok(ct, name, zone, profile=None, link_zones=None, rect=None):
     """UIA 语义筛选（与 nav_helper.js 的 ROLE_WHITELIST 对齐）。
 
     规范要求：只允许 button / tab / textbox / searchbox / combobox / menuitem /
@@ -3246,20 +3365,67 @@ def _uia_sem_ok(ct, name, zone, profile=None, link_zones=None):
         "Group": "group", "Document": "document", "Pane": "pane",
     }
     role = role_map.get(ct or "", (ct or "").lower()) or "unknown"
+    # 跳过导航类链接(跳转到内容/跳过导航): 平时隐藏在视口外, 矩形在窗口上方,
+    # 会污染区域首落点(左上角优先必中它), 一律不收
+    if role in ("link", "button") and name and re.search(
+            r"^(跳转到|跳过导航|skip to|skip navigation)", name, re.I):
+        return False, "noise: skip-link"
     if role == "link":
-        if not name:
+        # 页脚备案/证照类小字链接(抖音侧栏底部京ICP/营业执照/举报等, 高≤18px):
+        # 遥控永远不会想点, 收了只会让向下导航滑进页脚垃圾堆。侧栏真导航
+        # 项都是 40px 左右高, 矮于 18px 的侧栏链接一律按页脚处理
+        if rect and float(rect[3] - rect[1]) <= 18.0 and name and (
+                zone == "SIDEBAR" or re.search(
+                    r"(ICP|备案|营业执照|许可证|公网安备|举报|人服证|网信算备)", name)):
+            return False, "link 页脚"
+        # YouTube 封面链接在 UIA 里常无名(图片链接无 alt): 视频站点封面尺寸的
+        # 无名链接照样放行当整卡锚点, 否则锚点缺失、分组失效、标题反而被选到
+        _pid0 = (profile or {}).get("id") or "generic"
+        _is_thumb = _pid0 in ("youtube", "bilibili", "douyin") and _uia_is_thumb_rect(rect)
+        if not name and not _is_thumb:
             return False, "link 无名"
         lz = link_zones
         if lz is None:
             lz = set((profile or {}).get("link_zones") or ("TOPBAR", "SIDEBAR"))
         if zone not in lz:
+            # 视频站点首页: 只放行封面尺寸的大链接(视频窗口本身, 点进去看视频);
+            # 标题/频道/头像等卡内小链接尺寸不够, 照旧拒绝
+            pid = (profile or {}).get("id") or "generic"
+            if pid in ("youtube", "bilibili", "douyin") and zone == "MAIN" \
+                    and _uia_is_thumb_rect(rect):
+                return True, ""
+            # YouTube 改选标题: 有名的标题尺寸链接也放行(分组时当锚点, 封面被去掉)
+            if pid == "youtube" and zone == "MAIN" and name and _uia_is_title_rect(rect):
+                return True, ""
             return False, "link 区域外"
         return True, ""
     if role in ("textbox", "combobox", "checkbox", "radio",
-                "slider", "tab", "menuitem", "group", "document"):
+                "slider", "tab", "menuitem", "group", "document",
+                "listitem", "treeitem", "dataitem"):
+        # listitem/treeitem/dataitem 只在 descend 里对可键盘聚焦的才放行
+        # (原生应用如设置的导航项; 网页列表行不可聚焦, 已在上游挡掉)
         return True, ""
     if role == "button":
+        # 侧栏小图标按钮(置顶/操作等 20px 级): 有名也过滤, 只留条目本身;
+        # 顶部条带(搜索/收起等头部动作)除外。日志实证: ChatGPT/Gemini 侧栏
+        # 每条历史带 2 个小按钮, 候选涨到 130+ 全是这类噪音
+        if zone == "SIDEBAR" and rect:
+            _w = float(rect[2] - rect[0])
+            _h = float(rect[3] - rect[1])
+            if _w <= 28.0 and _h <= 28.0:
+                _tr = _SPATIAL_CACHE.get("target_rect")
+                if not (_tr and float(rect[1]) <= float(_tr[1]) + 110.0):
+                    return False, "noise: sidebar-tiny"
         if not name:
+            # 简单控制(UIA 兜底层与 DOM 层对齐): 侧边栏无名图标按钮不收,
+            # 只留带名字的一级入口; 其他区域保持原行为(无名按钮仍收)。
+            # 例外: 侧栏顶部条带(窗口顶 110px 内)是搜索/收起/新对话等头部动作,
+            # 图标按钮在 UIA 里常无名, 一刀切会让搜索键永远选不到——顶部放行
+            if zone == "SIDEBAR":
+                _tr = _SPATIAL_CACHE.get("target_rect")
+                if _tr and rect and float(rect[1]) <= float(_tr[1]) + 110.0:
+                    return True, ""
+                return False, "noise: sidebar-icon"
             return True, ""
         # 行政/版权/法律等纯噪音信息
         if re.search(r"ICP备|公网安备|增值电信|营业执照|许可证|版权所有|©|隐私政策|使用条款|意见反馈|免责声明", name):
@@ -3272,6 +3438,76 @@ def _uia_sem_ok(ct, name, zone, profile=None, link_zones=None):
                 return False, "noise: card-action"
         return True, ""
     return False, f"role={role}"
+
+
+def _uia_video_group(cands, profile=None):
+    """视频整卡分组(UIA 无 DOM 祖先, 只能几何), 每卡只留一个停靠点:
+    - YouTube: 标题链接当锚点(用户定: 选标题), 封面/头像/频道/三点菜单全去掉。
+      卡片几何(云端实测): 封面在上, 下方左侧圆形头像、右侧标题(1-2 行)、
+      标题下频道行、三点在标题行最右——锚点区域向左扩 60 盖头像、向上盖封面、
+      向下盖频道行、向右盖三点。
+    - 哔哩哔哩/抖音: 封面大链接当锚点, 锚点下方内件全去掉(真机已验证可用)。
+    编辑器类控件永不删(卡片里不会有, 纯防御)。返回 (保留候选, 去掉个数)。"""
+    pid = (profile or {}).get("id") or "generic"
+    if pid not in ("youtube", "bilibili", "douyin") or not cands:
+        return cands, 0
+    if pid == "youtube":
+        # 侧栏导航项尺寸也像标题(204x40), 绝不能当卡片锚点——锚点区上下
+        # 扩张会把相邻导航项当卡内件吞掉(实测每 3 项只剩 1 项, 侧栏"跳两格")。
+        # 导航项特征: 贴窗口左缘 40px 内且宽 ≤240(窄窗口时第一列标题离左缘
+        # 也只有 ~100px, 不能只看距离)。这类候选不当锚点、也不被分组删除
+        _tr = _SPATIAL_CACHE.get("target_rect")
+        _wl = float(_tr[0]) if _tr else 0.0
+        def _in_guide(c):
+            return (float(c[3][0]) - _wl) <= 40.0 and (float(c[3][2]) - float(c[3][0])) <= 240.0
+        raw = [c for c in cands
+               if c[1] == "Hyperlink" and c[2] and _uia_is_title_rect(c[3])
+               and not _in_guide(c)]
+        raw.sort(key=lambda c: (c[3][1], c[3][0]))
+        anchors = []
+        zones = []
+        for a in raw:
+            l, t, r, b = a[3]
+            h = float(b - t)
+            zone = (l - 60.0, t - max(200.0, h * 5.0), r + 50.0, b + max(70.0, h * 2.0))
+            cx = (l + r) / 2.0
+            cy = (t + b) / 2.0
+            # 已落在上一锚点区域内的是频道名等次级链接, 不是新卡标题
+            if any(zl <= cx <= zr and zt <= cy <= zb for zl, zt, zr, zb in zones):
+                continue
+            anchors.append(a)
+            zones.append(zone)
+    else:
+        anchors = [c for c in cands
+                   if c[1] in ("Hyperlink", "Button") and _uia_is_thumb_rect(c[3])]
+        zones = []
+        for a in anchors:
+            l, t, r, b = a[3]
+            zones.append((l - 10.0, t - 4.0, r + 10.0, b + max(100.0, float(b - t) * 0.6)))
+    if not anchors:
+        return cands, 0
+    anchor_ids = {id(c[0]) for c in anchors}
+    kept = []
+    dropped = 0
+    for c in cands:
+        if id(c[0]) in anchor_ids or c[1] in ("Edit", "Group", "Document", "ComboBox"):
+            kept.append(c)
+            continue
+        if pid == "youtube" and _in_guide(c):
+            kept.append(c)   # 侧栏导航项永不被卡片分组吞掉
+            continue
+        if pid == "youtube" and c[1] == "Button" and c[2] in ("其他操作", "More actions"):
+            # 三点菜单几何上偶尔落在锚点区外(标题区左扩不够)漏网;
+            # 用户定: YouTube 只选标题, 三点一律不进候选
+            dropped += 1
+            continue
+        cx = (c[3][0] + c[3][2]) / 2.0
+        cy = (c[3][1] + c[3][3]) / 2.0
+        if any(zl <= cx <= zr and zt <= cy <= zb for zl, zt, zr, zb in zones):
+            dropped += 1
+            continue
+        kept.append(c)
+    return kept, dropped
 
 
 def _spatial_scan_impl(fg, profile=None):
@@ -3289,9 +3525,23 @@ def _spatial_scan_impl(fg, profile=None):
     leaf_ints = {int(CT.EditControl), int(CT.ComboBoxControl), int(CT.ButtonControl),
                  int(CT.HyperlinkControl), int(CT.CheckBoxControl), int(CT.RadioButtonControl),
                  int(CT.SplitButtonControl)}
-    # 语义白名单: 剔除 ListItem / TreeItem / DataItem（列表行、帖子卡片、评论项）
+    # 语义白名单: 剔除 ListItem / TreeItem / DataItem（列表行、帖子卡片、评论项）;
+    # 但原生应用(设置/资源管理器)的主导航项就是可键盘聚焦的 ListItem,
+    # 这类单独放行(list_ints, descend 里查 IsKeyboardFocusable)
     focusable_ints = leaf_ints | {int(CT.TabItemControl), int(CT.MenuItemControl)}
+    list_ints = {int(CT.ListItemControl), int(CT.TreeItemControl), int(CT.DataItemControl)}
     editor_ints = {int(CT.GroupControl), int(CT.DocumentControl)}
+    # Profile 兜底重定: enter 时定的 Profile 可能已过期(切标签/换站后仍是 generic),
+    # 用当前窗口标题再匹配一次, 否则视频分组/聊天跨区全部不生效
+    if ((profile or {}).get("id") or "generic") == "generic":
+        try:
+            _wt = (fg.Name or "").strip()
+            if _wt:
+                _p2 = SP.match_profile("", _wt)
+                if (_p2.get("id") or "generic") != "generic":
+                    profile = _p2
+        except Exception:
+            pass
     link_zones = set((profile or {}).get("link_zones") or ("TOPBAR", "SIDEBAR"))
     seen_sig = set()
     rejects = {}
@@ -3301,11 +3551,13 @@ def _spatial_scan_impl(fg, profile=None):
         win_area = max(1.0, float((wr.right - wr.left) * (wr.bottom - wr.top)))
         win_bottom, win_width = float(wr.bottom), float(wr.right - wr.left)
         win_top, win_height = float(wr.top), float(wr.bottom - wr.top)
+        win_left, win_right = float(wr.left), float(wr.right)
         _SPATIAL_CACHE["target_rect"] = (wr.left, wr.top, wr.right, wr.bottom)
     except Exception:
         win_area = 0.0
         win_bottom, win_width = 0.0, 0.0
         win_top, win_height = 0.0, 0.0
+        win_left, win_right = 0.0, 0.0
     cands = []
     popups = []   # 弹层容器矩形(Menu/List): 焦点在其中时导航限定弹层, 不乱跳进页面内容
     visited = 0
@@ -3322,16 +3574,27 @@ def _spatial_scan_impl(fg, profile=None):
     except Exception:
         root = fg
     if root is fg:
-        # 内容区根找不到: 窗口刚切换时 Chromium a11y 树常未同步——等 0.8s 重找一次
-        time.sleep(0.8)
+        # 内容区根找不到: 窗口刚切换时 Chromium a11y 树常未同步——等 0.8s 重找一次。
+        # 只对浏览器窗口做: 原生应用(TG 桌面版等)本来就没有 Document,
+        # 睡 0.8s + 全树重走一遍纯属浪费(实测 TG 扫描 1.4s 的大头)
+        _is_browser_win = False
         try:
-            root = _spatial_find_content_root(fg, _SPATIAL_CACHE.get("target_rect")) or fg
+            _is_browser_win = (fg.ClassName or "") in ("Chrome_WidgetWin_1", "MozillaWindowClass")
         except Exception:
-            root = fg
+            pass
+        if _is_browser_win:
+            time.sleep(0.8)
+            try:
+                root = _spatial_find_content_root(fg, _SPATIAL_CACHE.get("target_rect")) or fg
+            except Exception:
+                root = fg
     root_is_doc = root is not fg   # 内容区根(Document): 其内嵌 iframe/子 Document 不再作为候选
+    content_top = win_top
     try:
         rr = root.BoundingRectangle
         _SPATIAL_CACHE["content_rect"] = (rr.left, rr.top, rr.right, rr.bottom)
+        if root_is_doc:
+            content_top = float(rr.top)
     except Exception:
         _SPATIAL_CACHE["content_rect"] = None
     if root_is_doc:
@@ -3357,7 +3620,7 @@ def _spatial_scan_impl(fg, profile=None):
             cti = int(ctrl.ControlType)
         except Exception:
             return
-        if cti in focusable_ints or cti in editor_ints or cti == int(CT.MenuControl):
+        if cti in focusable_ints or cti in editor_ints or cti in list_ints or cti == int(CT.MenuControl):
             rect = _spatial_rect(ctrl)
             if cti == int(CT.MenuControl) and rect is not None:
                 pr_area = float(rect[2] - rect[0]) * float(rect[3] - rect[1])
@@ -3390,13 +3653,17 @@ def _spatial_scan_impl(fg, profile=None):
                         except Exception:
                             aid_root = False
                         area = float(rect[2] - rect[0]) * float(rect[3] - rect[1])
-                        if not ro_bad and not aid_root and area < win_area * 0.85 \
+                        try:
+                            focusable = bool(ctrl.IsKeyboardFocusable)
+                        except Exception:
+                            focusable = False
+                        # 面积上限防的是网页根 Document 冒充编辑器; 但原生应用的
+                        # 编辑器本身就占满窗口(记事本 RichEdit 占 85%+), 可键盘
+                        # 聚焦且非只读的大 Document 是真编辑器, 放行(网页根有
+                        # ro_bad/aid_root 两道滤网兜底)
+                        if not ro_bad and not aid_root and (area < win_area * 0.85 or focusable) \
                                 and not (root_is_doc and cti == int(CT.DocumentControl)):
                             accept = True
-                            try:
-                                focusable = bool(ctrl.IsKeyboardFocusable)
-                            except Exception:
-                                focusable = False
                     else:
                         # 空 contenteditable 无文本不暴露 TextPattern, 但可聚焦——
                         # focusable 的 Group/Document 同样收(GPT 式空编辑框可达)
@@ -3412,6 +3679,22 @@ def _spatial_scan_impl(fg, profile=None):
                         focusable = bool(ctrl.IsKeyboardFocusable)
                     except Exception:
                         focusable = False
+                    if cti in list_ints and not focusable:
+                        # 网页列表行/帖子卡片不可键盘聚焦, 保持剔除;
+                        # 原生应用的可聚焦 ListItem(设置导航项)才收。
+                        # 例外: 带 SelectionItemPattern 的也可收——Telegram
+                        # Desktop 聊天列表项 kb=False 但可选中(实测), 不收则
+                        # 左侧群聊列表完全选不到。只查 ListItem/TreeItem:
+                        # DataItem(TG 消息子字段成百上千)逐个查 Pattern 是
+                        # COM 往返, 实测拖慢扫描
+                        if cti == int(CT.DataItemControl):
+                            accept = False
+                        else:
+                            try:
+                                ctrl.GetSelectionItemPattern()
+                                accept = True
+                            except Exception:
+                                accept = False
                 if accept and (rect[2] - rect[0] < 14 or rect[3] - rect[1] < 14):
                     accept = False   # <8px 的装饰/零碎元素, 遥控没有可达意义
                 if accept and win_width > 0:
@@ -3426,9 +3709,16 @@ def _spatial_scan_impl(fg, profile=None):
                         name = (ctrl.Name or "").strip()
                     except Exception:
                         name = ""
-                    ctn = _ct_name(ctrl)
+                    ctn = _ct_name(ctrl, cti)
+                    if ctn == "Group" and not name and win_height > 0 \
+                            and float(rect[3] - rect[1]) > win_height * 0.55:
+                        # 无名高 Group 是布局容器(抖音右侧操作栏整列容器
+                        # 82x942 实证): 收了会被当编辑器, 焦点落上去后
+                        # editing()=True 吞方向键, 栏内按钮永远选不到
+                        rejects["container"] = rejects.get("container", 0) + 1
+                        accept = False
                     zone = _uia_zone_of(rect, profile, name, ctn)
-                    ok, why = _uia_sem_ok(ctn, name, zone, profile, link_zones)
+                    ok, why = _uia_sem_ok(ctn, name, zone, profile, link_zones, rect)
                     if not ok:
                         # 语义白名单外的元素不进候选(正文/标题/图片/列表行/区域外链接)
                         rejects[why] = rejects.get(why, 0) + 1
@@ -3439,6 +3729,20 @@ def _spatial_scan_impl(fg, profile=None):
                         l2, t2, r2, b2 = rect
                         if b2 < win_top - win_height * 1.5 or t2 > win_bottom + win_height * 1.5:
                             rejects["offscreen"] = rejects.get("offscreen", 0) + 1
+                            accept = False
+                        elif root_is_doc and b2 <= content_top + 2:
+                            # 完全在内容视口上沿之外的元素: feed 滚走后上一条
+                            # 视频的残留(实测抖音话题标签 y37-65, 内容区顶 ~80),
+                            # 视觉上被浏览器工具栏挡住, 选中只会让用户困惑
+                            # 「搜索栏上面有按钮被定位到」; 回上一条走物理↑键
+                            rejects["offscreen-top"] = rejects.get("offscreen-top", 0) + 1
+                            accept = False
+                        elif r2 <= win_left or l2 >= win_right:
+                            # 横向完全在窗口外(B站 feed 轮播/虚拟列表把卡片排到
+                            # 视口右侧 x>窗宽): 选中后选框画在屏幕外, 用户看到
+                            # 「隔几个框就消失」。横向不像纵向能靠 SetFocus 滚动
+                            # 翻页, 直接丢掉; 部分可见的边缘卡片保留
+                            rejects["offscreen-x"] = rejects.get("offscreen-x", 0) + 1
                             accept = False
                 if accept:
                     # 同控件去重: 包装层与真实控件矩形几乎重合时只留一个
@@ -3451,8 +3755,12 @@ def _spatial_scan_impl(fg, profile=None):
                         seen_sig.add(sig)
                 if accept:
                     cands.append((ctrl, ctn, name, rect, focusable))
-                    if cti in leaf_ints:
-                        return   # 语义控件是叶子, 内部不再有独立焦点目标
+                    if cti in leaf_ints or cti in list_ints:
+                        # 语义控件/列表项是叶子: 内部不再有独立焦点目标。
+                        # TG 聊天项内有 7 个 DataItem 子字段, 逐个下钻是扫描
+                        # 耗时大头(实测 492 节点 1.58s); 被拒的列表行(网页
+                        # 卡片)仍要下钻找封面链接, 只对已收的提前返回
+                        return
         try:
             for child in ctrl.GetChildren():
                 descend(child, depth + 1)
@@ -3476,13 +3784,85 @@ def _spatial_scan_impl(fg, profile=None):
         pass
     if visited >= SPATIAL_MAX_NODES:
         log(f"spatial 扫描截断: 节点达到 {SPATIAL_MAX_NODES}, 候选 {len(cands)}")
+    cands, _dropped = _uia_video_group(cands, profile)
+    if _dropped:
+        rejects["card-inner"] = rejects.get("card-inner", 0) + _dropped
+    # 抖音播放器底栏合成候选: 音量/全屏等控件不在 UIA 树里(xgplayer 不暴露,
+    # 全树搜索无「全屏/音量」节点实证), 方向键永远选不到。按窗口几何在视频
+    # 底栏位置合成虚拟候选, OK 时发抖音官方快捷键(H 全屏/Shift± 音量/
+    # 空格播放暂停)代替点击
+    _SPATIAL_CACHE["player_keys"] = []
+    if ((profile or {}).get("id") or "") == "douyin":
+        try:
+            _wr = _SPATIAL_CACHE.get("target_rect")
+            if _wr:
+                _wl, _wt, _wr2, _wb = [float(v) for v in _wr]
+                # 底栏实际在窗口底部约 50px 处(弹幕行同高, 实测图标 y≈985-1005),
+                # 原先 wb-108 偏高约 40px, 用户报「音量定位偏上」
+                _by = _wb - 64.0
+                _synth = [
+                    ("播放/暂停", (_wl + 196.0, _by, _wl + 232.0, _by + 30.0), "space"),
+                    ("音量-", (_wr2 - 158.0, _by, _wr2 - 122.0, _by + 30.0), "-"),
+                    ("音量+", (_wr2 - 108.0, _by, _wr2 - 72.0, _by + 30.0), "+"),
+                    ("全屏", (_wr2 - 58.0, _by, _wr2 - 22.0, _by + 30.0), "h"),
+                ]
+                for _nm, _rc, _key in _synth:
+                    cands.append((root, "PlayerKey", _nm, _rc, False))
+                    _SPATIAL_CACHE["player_keys"].append((_nm, _rc, _key))
+        except Exception:
+            pass
+    # 输入区定带(通用, 不分站点): 以最宽的可编辑元素(聊天输入框)为中心划一条带,
+    # 带内候选归 COMPOSER。Gemini/ChatGPT 首页输入框居中不在底部, 纯几何规则认不出,
+    # 靠可编辑元素定位则居中/贴底都成立, 新站点也不用逐个适配。
+    try:
+        _editors = []
+        for _c in cands:
+            if _c[1] == "Edit" or (_c[1] in ("Group", "Document")
+                                   and _spatial_editable_focus(_c[0])[0]):
+                _editors.append(_c)
+        if _editors:
+            # 优先真 Edit 控件: 抖音弹幕栏的包装 Group(600 宽)比 Edit(482 宽)更宽,
+            # 按纯宽度会选包装层定带, Edit 反而落 MAIN 选不到
+            _main_ed = max(_editors, key=lambda c: (c[1] == "Edit",
+                                                    float(c[3][2] - c[3][0])))
+            _el, _et, _er, _eb = _main_ed[3]
+            # 护栏: 编辑器在窗口上部(<35% 高)时多半是搜索框(B站首页实证: 搜索框被
+            # 认成输入区), 不定带, 让几何规则按 SEARCH/TOPBAR 归
+            _win = _SPATIAL_CACHE.get("target_rect") or (0, 0, 0, 1080)
+            _win_h = max(1.0, float(_win[3] - _win[1]))
+            if float(_et - _win[1]) >= 0.35 * _win_h:
+                _SPATIAL_CACHE["composer_band"] = (_el - 60.0, _et - 12.0, _er + 60.0, _eb + 12.0)
+            else:
+                _SPATIAL_CACHE["composer_band"] = None
+        else:
+            _SPATIAL_CACHE["composer_band"] = None
+    except Exception:
+        _SPATIAL_CACHE["composer_band"] = None
     zcount = {}
     for _c, _ctn, _n, _r, _f in cands:
         _z = _uia_zone_of(_r, profile, _n, _ctn)
         zcount[_z] = zcount.get(_z, 0) + 1
     log(f"spatial 扫描: visited={visited} 候选={len(cands)} 弹层={len(popups)} "
+        f"耗时={time.time() - t_start:.2f}s "
         f"区域={zcount} 剔除={rejects} "
         f"root={'内容区' if root is not fg else (fg.ClassName or '')[:30]!r}")
+    # 诊断清单: 每个候选的类型/名字/区域/矩形, 排查「选不到/乱飘」时贴这一行即可定位。
+    # 按区域采样(每区最多 20 条): 侧栏历史条目上百时不淹没输入区等关键区域
+    try:
+        _by_zone = {}
+        for _c, _ctn, _n, _r, _f in cands:
+            _z = _uia_zone_of(_r, profile, _n, _ctn)
+            _by_zone.setdefault(_z, []).append(
+                f"{_ctn}:{( _n or '')[:16]}@{_z}({int(_r[0])},{int(_r[1])},{int(_r[2])},{int(_r[3])})")
+        _parts = []
+        for _z in ("COMPOSER", "SEARCH", "TOPBAR", "SIDEBAR", "MAIN", "PLAYER", "DIALOG"):
+            _items = _by_zone.get(_z) or []
+            if _items:
+                _parts.append(" | ".join(_items[:20]))
+        _dump = " || ".join(_parts)
+        log(f"spatial 候选清单({len(cands)}): {_dump[:30000]}")
+    except Exception:
+        pass
     _SPATIAL_CACHE["popups"] = popups
     _SPATIAL_CACHE["rejects"] = rejects
     _SPATIAL_CACHE["zones"] = zcount
@@ -3523,15 +3903,22 @@ def _spatial_shift_cache(items, dx, dy):
             for c, ct, nm, r, f in items]
 
 
-def _spatial_focus_feedback(rect) -> None:
+def _spatial_focus_feedback(rect, profile=None, ct=None) -> None:
     """焦点视觉反馈双通道(选中效果):
     ① 鼠标指针移到元素中心——应用的悬停效果 100% 可见(网页 :hover / 原生悬停高亮),
        指针本身也是位置指示, 不点击无副作用;
-    ② Ctrl 单按注入键盘模态, 让浏览器显示原生 focus ring(等效 Tab 选中效果)"""
+    ② Ctrl 单按注入键盘模态, 让浏览器显示原生 focus ring(等效 Tab 选中效果)。
+    例外: 链接类候选鼠标移到元素左上角外侧 3px——视频站/图片站悬停封面或
+    图片约 1 秒就自动播预览或弹大图, 移到中心方向键走两步就像「打开了图片」;
+    停在外角既指示选中位置又不触发悬停。按钮类保留中心悬停高亮。"""
+    _is_cover = ct == "Hyperlink" or _uia_is_thumb_rect(rect)
     try:
-        cx = int((rect[0] + rect[2]) / 2.0)
-        cy = int((rect[1] + rect[3]) / 2.0)
-        pyautogui.moveTo(cx, cy, duration=0)
+        if _is_cover:
+            pyautogui.moveTo(max(0, int(rect[0]) - 3), max(0, int(rect[1]) - 3), duration=0)
+        else:
+            cx = int((rect[0] + rect[2]) / 2.0)
+            cy = int((rect[1] + rect[3]) / 2.0)
+            pyautogui.moveTo(cx, cy, duration=0)
     except Exception:
         pass
     try:
@@ -3542,7 +3929,7 @@ def _spatial_focus_feedback(rect) -> None:
 
 
 def _spatial_rank(start_rect, cands, direction, k=SPATIAL_TOPK,
-                  profile=None, zone=None, free=False):
+                  profile=None, zone=None, free=False, _cone=1.73):
     """简化版方向评分: 严格遵循按键方向, 选最近的元素。
 
     核心原则:
@@ -3592,12 +3979,12 @@ def _spatial_rank(start_rect, cands, direction, k=SPATIAL_TOPK,
                 if not free:
                     continue   # 超过 1 倍高度视为不同行
                 # 跨区仍限制在约 72° 方向锥内, 避免斜跳到页面角落
-                if side > 0 and abs(side_center) > max(fwd * 3.0, start_h * 2.5):
+                if side > 0 and abs(side_center) > max(fwd * 1.2, start_h * 1.5):
                     continue
         # 垂直移动: 用宽松的方向锥(60°), 允许较大水平偏移
         else:
-            if side > 0 and abs(side_center) > fwd * 1.73:
-                continue   # tan(60°)≈1.73, 超过 60° 锥外排除
+            if side > 0 and abs(side_center) > fwd * _cone:
+                continue   # tan(60°)≈1.73, 超过锥外排除
         gap = max(0.0, main)
         # 副轴重叠量: 正前方的元素 overlap > 0, 是用户直觉的"下一个"
         if vertical:
@@ -3606,8 +3993,13 @@ def _spatial_rank(start_rect, cands, direction, k=SPATIAL_TOPK,
             overlap = max(0.0, min(b1, b2) - max(t1, t2))
         # 评分: 主轴距离 + 副轴偏移 * 权重, 有重叠的加分
         score = gap + abs(side_center) * 0.3
-        if overlap > 4:
-            score -= min(50.0, overlap * 0.2)   # 正前方优先
+        if overlap > 4 and ct != "PlayerKey":
+            # 正前方(副轴重叠)强优先: 否则侧栏这种纵向密集列总有一项
+            # gap 更小, 从视频按向下会被侧栏抢走(实测)。
+            # 合成底栏候选除外: 它的假位置恰与顶部消息图标 x 重叠,
+            # -1000 奖励会让 846px 外的音量键抢在 288px 外的头像前面
+            # (实测从消息按下跳到音量键)
+            score -= 1000.0 + min(50.0, overlap * 0.2)
         # 视口外推迟
         if trect and not (trect[0] <= cx2 <= trect[2] and trect[1] <= cy2 <= trect[3]):
             score += max(vp_h, vp_w) * 1.5
@@ -3618,6 +4010,11 @@ def _spatial_rank(start_rect, cands, direction, k=SPATIAL_TOPK,
         if ct == "Group" and not name:
             score += 300.0
         scored.append((score, ctrl, ct, rect))
+    if not scored and _cone < 4.0:
+        # 严格锥内无人时放宽再找一遍: 侧栏右上角的搜索键与下方条目横向错位大,
+        # 60° 锥会把它排除导致永远选不到; 放宽只在严格无果时触发, 不改变平常手感
+        return _spatial_rank(start_rect, cands, direction, k=k,
+                             profile=profile, zone=zone, free=free, _cone=4.0)
     scored.sort(key=lambda t: t[0])
     return scored[:k]
 
@@ -3635,6 +4032,15 @@ def _spatial_editable_focus(ctrl):
                 editable = ctrl.GetPropertyValue(30046) is not True   # 非只读
             except Exception:
                 editable = True
+            if editable:
+                try:
+                    # 资源管理器详情视图的单元格也报 Edit+非只读, 但不可键盘聚焦,
+                    # SetFocus 必失败——那是列表格子不是输入框, 不能算编辑态,
+                    # 否则方向键被吞成「文本区·方向键」卡在格子上
+                    if not ctrl.IsKeyboardFocusable:
+                        editable = False
+                except Exception:
+                    pass
         if not editable and fct in ("Group", "Document"):
             try:
                 blob = f"{ctrl.AutomationId or ''} {ctrl.ClassName or ''} {ctrl.Name or ''}".lower()
@@ -3651,8 +4057,191 @@ def _spatial_editable_focus(ctrl):
         return (False, "")
 
 
+_PLACEHOLDER_TEXTS = ("Ask Gemini", "Enter a prompt for Gemini",
+                      "问问 Gemini", "询问 Gemini", "为 Gemini 输入提示",
+                      "询问 ChatGPT", "Message ChatGPT", "给 ChatGPT 发送消息",
+                      "Send a message", "输入消息", "Type a message",
+                      "发个弹幕", "发送弹幕", "发个友善的弹幕", "说点什么",
+                      "搜索你感兴趣的内容", "搜索视频、番剧、UP主",
+                      "搜索", "Search")
+
+
+def _is_placeholder_text(text: str, cname: str = "") -> bool:
+    """文本是否为占位文案(非用户真输入): 与控件名相同, 或命中已知占位清单。
+    中文 Gemini 实测: 空框文档文字=「问问 Gemini」, 控件名=「为 Gemini 输入提示」,
+    两者不同, 清单必须含中文占位, 否则空框永远算编辑态。"""
+    t = (text or "").strip()
+    if not t:
+        return True
+    if cname and t == cname.strip():
+        return True
+    return t in _PLACEHOLDER_TEXTS or any(t.startswith(p) for p in _PLACEHOLDER_TEXTS)
+
+
+def _spatial_field_has_room(ctrl):
+    """输入框里是否真有可编辑内容(有文字或有选区)。空框不算编辑态——
+    与 DOM 层 editing_room 对齐: 页面自动聚焦空搜索框/空聊天框时,
+    方向键若全被吞成移光标, 用户感知就是「卡在输入框里出不来」。
+    TextPattern 不可用时保守返回 True(宁可移光标, 不误抢)。"""
+    # ValuePattern 优先: Edit 类控件的真实值以它为准。TP 会把占位文字读成
+    # 文档内容, VP 为空即没真内容——抖音弹幕框/Gemini 输入框都卡过这里。
+    # 注意 VP.Value 也可能就是占位文字(contenteditable 实测: Gemini 空框
+    # VP/TP 读到的都是「问问 Gemini」), 必须过占位判定再算有内容
+    try:
+        _vp = ctrl.GetValuePattern()
+        _v = (_vp.Value or "").strip()
+        if not _v:
+            return False
+        try:
+            _cn = (ctrl.Name or "").strip()
+        except Exception:
+            _cn = ""
+        return not _is_placeholder_text(_v, _cn)
+    except Exception:
+        pass
+    try:
+        tp = ctrl.GetTextPattern()
+        doc = tp.DocumentRange
+        text = (doc.GetText(-1) or "").strip()
+        if text:
+            # 占位文字会被 GetText 读出来, 视为没真内容, 否则空框永远算编辑态、
+            # 方向键被吞。判定: 与控件名相同, 或命中已知占位文案(Gemini 实测:
+            # 占位 Ask Gemini、控件名 Enter a prompt for Gemini, 两者并不相同)
+            try:
+                cname = (ctrl.Name or "").strip()
+            except Exception:
+                cname = ""
+            _placeholders = _PLACEHOLDER_TEXTS
+            if not _is_placeholder_text(text, cname):
+                return True
+        for rng in tp.GetSelection() or []:
+            if (rng.GetText(-1) or ""):
+                return True
+        return False
+    except Exception:
+        # TextPattern 不可用时用 ValuePattern 兜底判空(Edit 控件常见),
+        # 都拿不到才保守算有内容
+        try:
+            return bool((ctrl.GetValuePattern().Value or "").strip())
+        except Exception:
+            return True
+
+
+def _spatial_doc_empty(ctrl):
+    """文档是否为空(光标同时在文档头和尾且选区无文字)。占位文字场景下
+    GetText 有字但文档仍空, 靠端点判定最稳。判定失败保守返回 False。"""
+    try:
+        tp = ctrl.GetTextPattern()
+        doc = tp.DocumentRange
+        sels = tp.GetSelection() or []
+        if not sels:
+            return False
+        sel = sels[0]
+        if (sel.GetText(-1) or ""):
+            return False
+        return sel.CompareEndpoints(0, doc, 0) == 0 and sel.CompareEndpoints(1, doc, 1) == 0
+    except Exception:
+        try:
+            return not (ctrl.GetValuePattern().Value or "").strip()
+        except Exception:
+            return False
+
+
+def _spatial_caret_at_edge(ctrl, direction):
+    """光标是否已在文本边缘: 在开头按左/上、在末尾按右/下时, 再发方向键
+    只是原地不动, 应逃逸为空间导航跳出输入框。判定失败保守返回 False。
+    注意焦点候选元素与实际焦点常不是同一个(Gemini 输入框候选是外层元素,
+    实际焦点是内层 Document 'Text Area'), 外层取 TextPattern 会抛异常或
+    选区为空, 故先查 GetFocusedControl 再查候选元素。边缘判定用「光标前/
+    后文本是否为空」而非端点重合, 避开编辑器文档范围带不可见节点的坑。"""
+    cands = []
+    try:
+        fc = _UIA_AUTO.GetFocusedControl()
+        if fc is not None:
+            cands.append(fc)
+    except Exception as _e:
+        log(f"spatial caret边缘: GetFocusedControl 失败 err={_e!r}")
+    if ctrl is not None and all(ctrl is not c for c in cands):
+        cands.append(ctrl)
+    # 焦点候选常是外层 Edit, 真光标在内层 Document('Text Area')上:
+    # 外层 TextPattern 的选区停在文本末尾(before=全文), 与页面真实光标不一致
+    # (2026-11-28 Gemini 实测)。向下找 Document 子控件并优先查它。
+    docs = []
+    for base in list(cands):
+        stack = [(base, 0)]
+        while stack:
+            node, d = stack.pop()
+            if d >= 3:
+                continue
+            try:
+                kids = node.GetChildren()
+            except Exception:
+                continue
+            for k in kids:
+                try:
+                    if k.ControlTypeName == "Document":
+                        docs.append(k)
+                except Exception:
+                    pass
+                stack.append((k, d + 1))
+    seen_ids = set()
+    ordered = []
+    for c in docs + cands:
+        try:
+            rid = tuple(c.GetRuntimeId())
+        except Exception:
+            rid = id(c)
+        if rid in seen_ids:
+            continue
+        seen_ids.add(rid)
+        ordered.append(c)
+    saw_no_sel = False
+    for c in ordered:
+        try:
+            tp = c.GetTextPattern()
+            doc = tp.DocumentRange
+            sels = tp.GetSelection() or []
+            if not sels:
+                # 无选区=无光标(焦点是程序 SetFocus 送进去的, 页面没给光标):
+                # 方向键无处可移, 视为已在边缘逃逸。Gemini 空框实测 caret=None,
+                # 原先返回 False 导致四个方向全被吞, 卡死在输入栏。
+                # 多候选时先记下, 其余候选都无结论时再按此逃逸
+                saw_no_sel = True
+                continue
+            sel = sels[0]
+            if direction in ("left", "up"):
+                pre = doc.Clone()
+                pre.MoveEndpointByRange(1, sel, 0)
+                _before = pre.GetText(-1)
+                log(f"spatial caret边缘: ctrl={c.Name!r} dir={direction} before_len={len(_before)} -> {_before == ''}")
+                return _before == ""
+            if direction in ("right", "down"):
+                if sel.CompareEndpoints(1, doc, 1) == 0:
+                    log(f"spatial caret边缘: ctrl={c.Name!r} dir={direction} end-coincide -> True")
+                    return True
+                post = doc.Clone()
+                post.MoveEndpointByRange(0, sel, 1)
+                _after = post.GetText(-1)
+                log(f"spatial caret边缘: ctrl={c.Name!r} dir={direction} after_len={len(_after)} -> {_after.strip() == ''}")
+                return _after.strip() == ""
+        except Exception as _e:
+            log(f"spatial caret边缘异常: ctrl={getattr(c, 'Name', '?')!r} err={_e!r}")
+            continue
+    return saw_no_sel
+
+
+def _spatial_caret_edge_impl(direction):
+    """NavEngine 编辑态短路前的边缘检查: 光标已到边缘时返回 True,
+    让方向键走空间导航逃逸, 而不是原样发给应用原地不动。"""
+    fok = _SPATIAL_CACHE.get("focus")
+    if not fok or fok[0] is None:
+        return False
+    return _spatial_caret_at_edge(fok[0], direction)
+
+
 def _spatial_editing_impl():
-    """编辑态判定(不发按键): 当前焦点是否为真可编辑控件。专职 UIA 线程内执行"""
+    """编辑态判定(不发按键): 当前焦点是否为真可编辑控件且框里有内容。
+    空框返回 False, 让方向键走空间导航(见 _spatial_field_has_room)。专职 UIA 线程内执行"""
     fok = _SPATIAL_CACHE.get("focus")
     ctrl = fok[0] if fok else None
     if ctrl is None:
@@ -3662,7 +4251,14 @@ def _spatial_editing_impl():
             ctrl = None
     if ctrl is None:
         return False
-    return bool(_spatial_editable_focus(ctrl)[0])
+    _ed, _lab = _spatial_editable_focus(ctrl)
+    if not _ed:
+        return False
+    _empty = _spatial_doc_empty(ctrl)
+    _room = False if _empty else _spatial_field_has_room(ctrl)
+    # 诊断: 「卡在输入栏」时靠这行看判定卡在哪一步(每键至多两行)
+    log(f"spatial 编辑态判定: ctrl={_lab} empty={_empty} room={_room} -> {_room}")
+    return _room
 
 
 def _spatial_zone_first_impl(zone=None, profile=None):
@@ -3684,6 +4280,11 @@ def _spatial_zone_first_impl(zone=None, profile=None):
     items, _ = _spatial_candidates_impl(target, profile=profile)
     if not items:
         items, _ = _spatial_candidates_impl(target, force=True, profile=profile)
+    # 落点就近: 有上一个焦点时落离它最近的候选, 不再固定左上角(切区就跳顶部)
+    _fc = _SPATIAL_CACHE.get("focus")
+    _frect = _fc[1] if _fc and len(_fc) > 1 else None
+    _fcx = (_frect[0] + _frect[2]) / 2.0 if _frect else None
+    _fcy = (_frect[1] + _frect[3]) / 2.0 if _frect else None
     pool = []
     for ctrl, ct, name, cr, _focusable in items:
         if zone and _uia_zone_of(cr, profile, name, ct) != zone:
@@ -3691,8 +4292,14 @@ def _spatial_zone_first_impl(zone=None, profile=None):
         if vrect:
             if cr[2] <= vrect[0] or cr[0] >= vrect[2] or cr[3] <= vrect[1] or cr[1] >= vrect[3]:
                 continue
-        key = (cr[0] - vrect[0] if vrect else cr[0]) + (cr[1] - vrect[1] if vrect else cr[1])
-        pool.append((key, ctrl, ct, cr))
+        if _fcx is not None:
+            key = abs((cr[0] + cr[2]) / 2.0 - _fcx) + abs((cr[1] + cr[3]) / 2.0 - _fcy)
+        else:
+            key = (cr[0] - vrect[0] if vrect else cr[0]) + (cr[1] - vrect[1] if vrect else cr[1])
+        # 输入区落点优先输入框本身(可编辑元素), 不是同排的 +/麦克风小按钮;
+        # 首次进入没有上一个焦点时尤其重要, 否则按左上角会落到排头小按钮/下方建议项
+        _ed = 0 if (zone == "COMPOSER" and _spatial_editable_focus(ctrl)[0]) else 1
+        pool.append(((_ed, key), ctrl, ct, cr))
     pool.sort(key=lambda t: t[0])
     for _k, ctrl, ct, cr in pool:
         try:
@@ -3709,8 +4316,22 @@ def _spatial_zone_first_impl(zone=None, profile=None):
         if not _focus_verify_retry(ctrl):
             continue
         _SPATIAL_CACHE["focus"] = (ctrl, cr, None)
-        _spatial_focus_feedback(cr)
+        _spatial_focus_feedback(cr, profile, ct)
         FOCUS_BOX.show(cr)
+        return (label, cr)
+    # 虚拟焦点兜底: 池内全部不吃键盘焦点时接受最优候选(画框+记起点),
+    # 否则 enter 直接失败「未就绪」或落到别的区
+    if pool:
+        _k, ctrl, ct, cr = pool[0]
+        try:
+            label = (ctrl.Name or ct or "")[:30]
+        except Exception:
+            label = ct
+        _SPATIAL_CACHE["focus"] = (ctrl, cr, None)
+        _SPATIAL_CACHE["focus_ts"] = time.time()
+        _spatial_focus_feedback(cr, profile, ct)
+        FOCUS_BOX.show(cr)
+        log(f"spatial 虚拟焦点接受(首焦点): {label} rect={cr}")
         return (label, cr)
     return None
 
@@ -3742,7 +4363,11 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
     fok = _SPATIAL_CACHE.get("focus")
     if fok and fok[0] is not None and not force_spatial:
         editable, flabel = _spatial_editable_focus(fok[0])
-        if editable:
+        # 空框放行空间导航; 光标已到文本边缘时再按同方向也逃逸跳出,
+        # 否则短按方向键永远只移光标, 用户感知「卡在输入框」
+        if editable and _spatial_field_has_room(fok[0]) \
+                and not _spatial_doc_empty(fok[0]) \
+                and not _spatial_caret_at_edge(fok[0], direction):
             _srv_tap(direction)   # 原样发物理方向键: 移文字光标/滚动页面
             try:
                 frect = _spatial_rect(fok[0])
@@ -3753,13 +4378,18 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
     start_rect = None
     focus_entry = _SPATIAL_CACHE.get("focus")
     if focus_entry:
-        try:
-            rr = focus_entry[0].BoundingRectangle   # 复用上一步焦点: 1 次 COM 即得新起点
-            start_rect = (rr.left, rr.top, rr.right, rr.bottom)
-            if start_rect[2] - start_rect[0] <= 0 or start_rect[3] - start_rect[1] <= 0:
+        # 合成播放器候选的 ctrl 是内容根, 重读矩形会得到整窗——起点必须用
+        # 缓存的合成矩形, 否则从全屏按右会按整窗中心算, 跳到莫名其妙处
+        if focus_entry[1] and _player_key_name(focus_entry[1]):
+            start_rect = tuple(float(v) for v in focus_entry[1])
+        else:
+            try:
+                rr = focus_entry[0].BoundingRectangle   # 复用上一步焦点: 1 次 COM 即得新起点
+                start_rect = (rr.left, rr.top, rr.right, rr.bottom)
+                if start_rect[2] - start_rect[0] <= 0 or start_rect[3] - start_rect[1] <= 0:
+                    start_rect = None
+            except Exception:
                 start_rect = None
-        except Exception:
-            start_rect = None
     if start_rect is None:
         # 无缓存起点: 读真实焦点; 再不行用目标窗口可视中心做虚拟原点
         focused = None
@@ -3815,6 +4445,7 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
     if DRY:
         log(f"空间导航 {direction}: 区域={eff_zone} free={eff_free} "
             f"池={len(zone_pool)}/{len(items)}")
+    _first_failed = None   # 虚拟焦点兜底: 试链全失败时接受最优候选(见下方)
     for attempt in range(2):
         ranked = _spatial_rank(start_rect, zone_pool, direction,
                                profile=profile, zone=eff_zone, free=eff_free)
@@ -3823,17 +4454,41 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 label = (ctrl.Name or ct or "")[:30]
             except Exception:
                 label = ct
+            if ct == "PlayerKey":
+                label = _player_key_name(rect) or "播放器"
             if limit is not None:
                 label = f"{label}｜弹层内·返回键关闭"
             if DRY:
                 log(f"DRYRUN 空间导航 {direction} -> {label} rect={rect}")
                 actual_zone = "DIALOG" if limit is not None else _uia_zone_of(rect, profile, label, ct)
                 return (label, rect, True, actual_zone)   # 不动真焦点, 便于验证几何
+            # 抖音 feed 跨视频: 目标在视口外(下一条视频的元素)时不要 SetFocus——
+            # Chromium 的焦点滚动是最小滚动, feed 会半截停在两条视频之间
+            # (实测「视频底部卡在中间」)。发物理方向键走抖音原生切视频,
+            # 下一键再在新视频内导航
+            if direction in ("up", "down") and limit is None \
+                    and ((profile or {}).get("id") or "") == "douyin":
+                _trect = _SPATIAL_CACHE.get("target_rect")
+                if _trect:
+                    _cy = (rect[1] + rect[3]) / 2.0
+                    if _cy > _trect[3] or _cy < _trect[1]:
+                        _srv_tap(direction)
+                        _SPATIAL_CACHE["stale"] = True
+                        _SPATIAL_CACHE["last_reason"] = None
+                        log(f"spatial 跨视频目标在视口外, 物理{direction}键切视频")
+                        return ("[页面滚动]", start_rect, True, eff_zone)
             try:
                 ctrl.SetFocus()
             except Exception:
+                log(f"spatial 聚焦异常跳过: {label} rect={rect}")
+                if _first_failed is None:
+                    _first_failed = (label, ctrl, ct, rect)
                 continue   # 不可聚焦/元素已消失: 试次优
             if not _focus_verify_retry(ctrl):
+                # 诊断: 连续多条=页面元素不吃键盘焦点, 试链逐个跳过就是「闪」的来源
+                log(f"spatial 聚焦未生效跳过: {label} rect={rect}")
+                if _first_failed is None:
+                    _first_failed = (label, ctrl, ct, rect)
                 continue   # SetFocus 静默失败/竞态未生效: 重试验证后仍失败才试次优
             # 滚动补偿(每次移动都做, 可靠不依赖 tick 的同元素推断): 焦点元素现读矩形与
             # 候选缓存矩形之差 = SetFocus 引发的页面/容器滚动量 → 候选缓存整体平移。
@@ -3843,24 +4498,33 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 nrect = (rr.left, rr.top, rr.right, rr.bottom)
             except Exception:
                 nrect = None
+            if ct == "PlayerKey":
+                nrect = None   # 合成候选: ctrl 是内容根, 其矩形不是底栏按钮位置
             if nrect and nrect[2] - nrect[0] > 0 and nrect[3] - nrect[1] > 0:
                 dx, dy = nrect[0] - rect[0], nrect[1] - rect[1]
-                if cached and (abs(dx) >= 2 or abs(dy) >= 2):
+                if cached and (abs(dx) >= 80 or abs(dy) >= 80):
+                    # 大幅位移=虚拟列表回收/整页跳转, 平移不可信: 标过期下键重扫,
+                    # 否则全部候选矩形错位, 框乱飘、落点乱跳
+                    _SPATIAL_CACHE["stale"] = True
+                elif cached and (abs(dx) >= 2 or abs(dy) >= 2):
                     _SPATIAL_CACHE["items"] = _spatial_shift_cache(_SPATIAL_CACHE["items"], dx, dy)
                 _SPATIAL_CACHE["focus"] = (ctrl, nrect, None)   # 下一键的起点; _hl_tick 会补 rid
-                _spatial_focus_feedback(nrect)   # 选中效果: 鼠标悬停 + 原生 focus ring
+                _spatial_focus_feedback(nrect, profile, ct)   # 选中效果: 鼠标悬停 + 原生 focus ring
                 FOCUS_BOX.show(nrect)
                 actual_zone = "DIALOG" if limit is not None else _uia_zone_of(nrect, profile, label, ct)
                 return (label, nrect, True, actual_zone)
             _SPATIAL_CACHE["focus"] = (ctrl, rect, None)
-            _spatial_focus_feedback(rect)
+            _spatial_focus_feedback(rect, profile, ct)
             FOCUS_BOX.show(rect)
             actual_zone = "DIALOG" if limit is not None else _uia_zone_of(rect, profile, label, ct)
             return (label, rect, True, actual_zone)
         if attempt == 0:
             now = time.time()
-            if now - _SPATIAL_CACHE.get("last_rescan", 0.0) < 1.0:
-                break   # 刚重扫过仍空: 到底/到边, 连按不再重复全树扫描
+            if now - _SPATIAL_CACHE.get("last_rescan", 0.0) < 1.0 \
+                    and not _SPATIAL_CACHE.get("stale"):
+                break   # 刚重扫过仍空: 到底/到边, 连按不再重复全树扫描。
+                        # 但 stale(页面已大幅滚动, 如抖音切视频)时必须立即重扫,
+                        # 否则旧矩形全错位, 方向键卡在视频交接处不动
             _SPATIAL_CACHE["last_rescan"] = now
             items, cached = _spatial_candidates_impl(target, force=True, profile=profile)
             zone_pool = items
@@ -3871,62 +4535,166 @@ def _spatial_nav_impl(direction, force_spatial=False, profile=None,
                 _SPATIAL_CACHE["last_reason"] = None
             continue
         break
+    # 虚拟焦点兜底: 方向上有候选但全部不吃键盘焦点(Gemini 侧栏历史条目实证:
+    # SetFocus 静默失败、焦点落到别处)——接受最优候选为虚拟焦点(画框+记起点),
+    # OK 时走 Invoke/鼠标点击激活。否则试链跳过后软回退会落到输入框等别处,
+    # 用户感知「侧栏选不中、老跳输入框」。
+    if _first_failed is not None:
+        _label, _ctrl, _ct, _rect = _first_failed
+        _SPATIAL_CACHE["focus"] = (_ctrl, _rect, None)
+        _SPATIAL_CACHE["focus_ts"] = time.time()
+        _spatial_focus_feedback(_rect, profile, _ct)
+        FOCUS_BOX.show(_rect)
+        _SPATIAL_CACHE["last_reason"] = None
+        log(f"spatial 虚拟焦点接受: {_label} rect={_rect}")
+        _az = "DIALOG" if limit is not None else _uia_zone_of(_rect, profile, _label, _ct)
+        return (_label, _rect, True, _az)
     _SPATIAL_CACHE["last_reason"] = _SPATIAL_CACHE.get("last_reason") or (
         "zone-end" if not eff_free else "end")
     # 软区域回退: 区域内到边(zone-end)时, 用全池(free)再找一次最近的元素。
     # 这样方向键永远有响应, 不会卡在区域边界上——用户感知是"自然过渡到相邻区域",
     # 而不是"死区/卡住"。弹层内不回退(弹层必须限定)。
     if not eff_free and eff_zone != "DIALOG" and _SPATIAL_CACHE.get("last_reason") in ("zone-end", "zone-empty"):
-        fallback = _spatial_rank(start_rect, items, direction,
+        # 聊天站点跨区直达: 侧边栏按右 -> 输入区(聊天窗口), 输入区按左 -> 侧边栏。
+        # 不限定池子时全池评分会落到顶部按钮/正文气泡上, 就是「按右跳到上面」。
+        fb_pool = items
+        _pid2 = (profile or {}).get("id") or "generic"
+        if _pid2 in ("chatgpt", "gemini"):
+            _want = None
+            if direction == "right" and eff_zone == "SIDEBAR":
+                _want = "COMPOSER"
+            elif direction == "left" and eff_zone == "COMPOSER":
+                _want = "SIDEBAR"
+            if _want:
+                _sub = [c for c in items
+                        if _uia_zone_of(c[3], profile, c[2], c[1]) == _want]
+                if _sub:
+                    fb_pool = _sub
+        fallback = _spatial_rank(start_rect, fb_pool, direction,
                                  profile=profile, zone=None, free=True)
+        _fb_failed = None   # 回退链虚拟焦点兜底: 与主试链同理, 否则跨区落点全失败时静默卡住
         for score, ctrl, ct, rect in fallback:
             try:
                 label = (ctrl.Name or ct or "")[:30]
             except Exception:
                 label = ct
+            if ct == "PlayerKey":
+                label = _player_key_name(rect) or "播放器"
             if DRY:
                 log(f"DRYRUN 软区域回退 {direction} -> {label} rect={rect}")
                 return (label, rect, True, _uia_zone_of(rect, profile, label, ct))
             try:
                 ctrl.SetFocus()
             except Exception:
+                log(f"spatial 回退聚焦异常跳过: {label} rect={rect}")
+                if _fb_failed is None:
+                    _fb_failed = (label, ctrl, ct, rect)
                 continue
             if not _focus_verify_retry(ctrl):
+                log(f"spatial 回退聚焦未生效跳过: {label} rect={rect}")
+                if _fb_failed is None:
+                    _fb_failed = (label, ctrl, ct, rect)
                 continue
             try:
                 rr = ctrl.BoundingRectangle
                 nrect = (rr.left, rr.top, rr.right, rr.bottom)
             except Exception:
                 nrect = None
+            if ct == "PlayerKey":
+                nrect = None   # 合成候选: ctrl 是内容根, 其矩形不是底栏按钮位置
             if nrect and nrect[2] - nrect[0] > 0 and nrect[3] - nrect[1] > 0:
                 dx, dy = nrect[0] - rect[0], nrect[1] - rect[1]
-                if cached and (abs(dx) >= 2 or abs(dy) >= 2):
+                if cached and (abs(dx) >= 80 or abs(dy) >= 80):
+                    # 大幅位移=虚拟列表回收/整页跳转, 平移不可信: 标过期下键重扫,
+                    # 否则全部候选矩形错位, 框乱飘、落点乱跳
+                    _SPATIAL_CACHE["stale"] = True
+                elif cached and (abs(dx) >= 2 or abs(dy) >= 2):
                     _SPATIAL_CACHE["items"] = _spatial_shift_cache(_SPATIAL_CACHE["items"], dx, dy)
                 _SPATIAL_CACHE["focus"] = (ctrl, nrect, None)
-                _spatial_focus_feedback(nrect)
+                _spatial_focus_feedback(nrect, profile, ct)
                 FOCUS_BOX.show(nrect)
                 _SPATIAL_CACHE["last_reason"] = None
                 return (label, nrect, True, _uia_zone_of(nrect, profile, label, ct))
             _SPATIAL_CACHE["focus"] = (ctrl, rect, None)
-            _spatial_focus_feedback(rect)
+            _spatial_focus_feedback(rect, profile, ct)
             FOCUS_BOX.show(rect)
             _SPATIAL_CACHE["last_reason"] = None
             return (label, rect, True, _uia_zone_of(rect, profile, label, ct))
+        if _fb_failed is not None:
+            _label, _ctrl, _ct, _rect = _fb_failed
+            _SPATIAL_CACHE["focus"] = (_ctrl, _rect, None)
+            _SPATIAL_CACHE["focus_ts"] = time.time()
+            _spatial_focus_feedback(_rect, profile, _ct)
+            FOCUS_BOX.show(_rect)
+            _SPATIAL_CACHE["last_reason"] = None
+            log(f"spatial 虚拟焦点接受(回退): {_label} rect={_rect}")
+            return (_label, _rect, True, _uia_zone_of(_rect, profile, _label, _ct))
+    # 视频流交接兜底: 该方向已无候选(抖音 feed 虚拟列表还没渲染出下一条的
+    # 元素)时, 发一次物理方向键让页面自己滚动/切视频, 并标缓存过期——
+    # 否则方向键在视频交接处永远「没有更多元素」卡死(实测)
+    if direction in ("up", "down") and limit is None:
+        try:
+            _srv_tap(direction)
+            _SPATIAL_CACHE["stale"] = True
+            _SPATIAL_CACHE["last_reason"] = None
+            log(f"spatial 方向无候选, 物理{direction}键滚动页面")
+            return ("[页面滚动]", start_rect, True, eff_zone)
+        except Exception:
+            pass
     return ("", None, False, zone or "")
+
+
+def _player_key_name(rect):
+    """合成播放器候选按矩形查名字(全屏/音量±/播放暂停), 无则 None"""
+    try:
+        for _nm, _rc, _key in (_SPATIAL_CACHE.get("player_keys") or []):
+            if all(abs(float(rect[i]) - float(_rc[i])) <= 2.0 for i in range(4)):
+                return _nm
+    except Exception:
+        pass
+    return None
 
 
 def _spatial_activate_impl():
     """OK 键: 对当前焦点元素执行默认动作 (Invoke→Toggle→ExpandCollapse→Select);
-    全部不可用时返回 None, 由调用方退回物理回车。专职 UIA 线程内执行"""
-    try:
-        focused = _UIA_AUTO.GetFocusedControl()
-    except Exception:
-        return None
+    全部不可用时返回 None, 由调用方退回物理回车。专职 UIA 线程内执行。
+    优先用导航缓存的焦点元素(焦点框画的那个), 先 SetFocus 再 Invoke——
+    Chromium 对未聚焦链接的 Invoke 常只聚焦不导航, 表现为「点两次才打开」。"""
+    focused = None
+    fok = _SPATIAL_CACHE.get("focus")
+    # 播放器底栏合成候选(抖音音量/全屏等): 焦点矩形命中合成表时发官方快捷键,
+    # 不走 Invoke/点击(这些控件不在 UIA 树里, 无处可点)
+    if fok and fok[1]:
+        for _nm, _rc, _key in (_SPATIAL_CACHE.get("player_keys") or []):
+            if all(abs(float(fok[1][i]) - float(_rc[i])) <= 2.0 for i in range(4)):
+                if DRY:
+                    log(f"DRYRUN 播放器快捷键: {_nm} -> {_key}")
+                    return True
+                try:
+                    if _key in ("+", "-"):
+                        pyautogui.hotkey("shift", _key)
+                    else:
+                        pyautogui.press(_key)
+                    log(f"spatial 播放器快捷键: {_nm} -> {_key}")
+                    return True
+                except Exception:
+                    return None
+    if fok and fok[0] is not None:
+        focused = fok[0]
+    if focused is None:
+        try:
+            focused = _UIA_AUTO.GetFocusedControl()
+        except Exception:
+            return None
     if focused is None:
         return None
     if DRY:
         log(f"DRYRUN 遥控激活: {_ct_name(focused)} {(focused.Name or '')[:30]!r}")
         return True
+    try:
+        focused.SetFocus()
+    except Exception:
+        pass
     for get, act in (
         ("GetInvokePattern", lambda p: p.Invoke()),
         ("GetTogglePattern", lambda p: p.Toggle()),
@@ -3937,13 +4705,28 @@ def _spatial_activate_impl():
             return True
         except Exception:
             continue
+    # ExpandCollapse 只对真正的展开类控件用(下拉/树/菜单): 抖音右侧栏
+    # 点赞/收藏等 Group 也带 Expand 模式, Expand()「成功」却无动作,
+    # 把真正的点击兜底挡在后面(实测收藏点不到)
+    if _ct_name(focused) in ("ComboBox", "TreeItem", "MenuItem", "SplitButton"):
+        try:
+            p = focused.GetExpandCollapsePattern()
+            if int(p.ExpandCollapseState) == 1:   # Expanded
+                p.Collapse()
+            else:
+                p.Expand()
+            return True
+        except Exception:
+            pass
+    # 模式全不可用: 鼠标已由焦点反馈移到元素中心, 直接物理点击兜底,
+    # 保证一次 OK 就打开(回车对部分链接只聚焦不导航, 同样是点两次的来源)
     try:
-        p = focused.GetExpandCollapsePattern()
-        if int(p.ExpandCollapseState) == 1:   # Expanded
-            p.Collapse()
-        else:
-            p.Expand()
-        return True
+        rect = _spatial_rect(focused)
+        if rect is not None:
+            cx = int((rect[0] + rect[2]) / 2.0)
+            cy = int((rect[1] + rect[3]) / 2.0)
+            pyautogui.click(cx, cy)
+            return True
     except Exception:
         pass
     return None
@@ -4045,11 +4828,30 @@ class UIAAdapter:
         r = _uia_call(_spatial_editing_impl, timeout=6.0)
         return bool(r)
 
+    def caret_at_edge(self, direction):
+        r = _uia_call(_spatial_caret_edge_impl, direction, timeout=6.0)
+        return bool(r)
+
     def press_direction(self, direction):
         _srv_tap(direction)
 
     def press_key(self, name):
         press_key(name)
+
+    def combo(self, keys):
+        combo(list(keys))
+
+    def is_browser(self, hwnd):
+        """目标窗口是不是浏览器(Chromium/Firefox): 返回键行为分流用。
+        浏览器返回=Alt+Left 后退一页; 原生应用(TG 桌面版等)返回=Esc 关
+        搜索/面板——Alt+Left 在原生应用里无动作, 搜索页关不掉(实测)"""
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetClassNameW(int(hwnd), buf, 256)
+            return buf.value in ("Chrome_WidgetWin_1", "MozillaWindowClass")
+        except Exception:
+            return False
 
     def activate(self):
         res = _uia_call(_spatial_activate_impl, timeout=6.0)
@@ -4191,7 +4993,11 @@ def api_remote(data: dict) -> dict:
     #      不该被测试脚本/后台进程抢走焦点就丢失绑定)
     #   3) 目标没了, 或者当前前台明确是另一个窗口且用户意图不明 -> 重新 enter
     reuse = False
-    if eng.target and ctypes.windll.user32.IsWindow(eng.target):
+    if eng.target and ctypes.windll.user32.IsWindow(eng.target) \
+            and not ctypes.windll.user32.IsIconic(eng.target):
+        # 最小化的目标不复用: 它的矩形是 -32000 一带, 扫描全是垃圾候选,
+        # 且 SetForegroundWindow 对最小化窗口也可能报成功, 把绑定钉死在
+        # 一个看不见的窗口上(2026-11-28 记事本最小化后切设置实测)
         if eng.target == fgw:
             reuse = True
         else:
@@ -4202,6 +5008,25 @@ def api_remote(data: dict) -> dict:
             except Exception:
                 reuse = False
 
+    if reuse:
+        # 同窗口切标签页时 Profile 不会自己更新: 绑定时是 B站/YouTube,
+        # 切到抖音后仍按旧站点的默认区/规则导航(实测开始控制滑到侧栏
+        # 最下面, 就是 YouTube 的 SIDEBAR 默认区残留)。标题变了就重定
+        # Profile——只换规则不重 enter, 焦点不重置
+        try:
+            _info = _win_info(eng.target)
+            _title = _info[2] if _info else ""
+            if _title and _title != eng.title:
+                _np = eng._profile_for("", _title)
+                if (_np.get("id") or "generic") != (eng.profile.get("id") or "generic"):
+                    eng.profile = _np
+                    eng.zone = _np.get("default_zone") or "MAIN"
+                    eng.title = _title
+                    log(f"remote: 切页重定 Profile -> {_np.get('id')} zone={eng.zone}")
+                else:
+                    eng.title = _title
+        except Exception:
+            pass
     if not reuse:
         info = _win_info(fgw)
         title = info[2] if info else ""
@@ -4215,6 +5040,9 @@ def api_remote(data: dict) -> dict:
     if not action:
         action = "status"
     out = eng.action(action, data)
+    if action in ("up", "down", "left", "right", "ok", "back",
+                  "zone_next", "zone_prev", "focus_back"):
+        _SPATIAL_CACHE["last_nav_ts"] = time.time()
     # 焦点框用「这次响应里一起返回的 rect」, 不要另外再读 eng.current_rect ——
     # 两者可能不是同一时刻的快照(name 是新元素、rect 还是上一个元素的),
     # 表现出来就是"框停在上一格, 名字已经变了"。同一份 payload 里取, 永远同步。

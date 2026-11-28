@@ -405,8 +405,10 @@ class NavEngine:
         if self.engine == "uia":
             r = self.uia.editing()
             self.editing = bool(r)
-        # 输入框编辑态：方向键交还应用（free 模式与长按 force 例外）
-        if self.editing and not force and self.mode != "free" and direction in DIRS:
+        # 输入框编辑态：方向键交还应用（free 模式与长按 force 例外）；
+        # 但光标已到文本边缘时不交还，落到空间导航逃逸出输入框
+        if self.editing and not force and self.mode != "free" and direction in DIRS \
+                and not self.uia.caret_at_edge(direction):
             self.uia.press_direction(direction)
             return self._status(f"[文本区·方向键] {self.current_name or '输入框'}")
 
@@ -582,8 +584,24 @@ class NavEngine:
                 except Exception:
                     pass
             return self._status("已返回（弹窗）")
-        self.uia.press_key("esc")
-        return self._status("已返回")
+        # 非弹窗: 浏览器两段式返回——先 Esc 关页面内面板(抖音评论抽屉/
+        # 详情浮层等, Alt+Left 关不掉, 实测「退出去卡在原地」), 1.5 秒内
+        # 再按一次才 Alt+Left 后退一页。原生应用(TG 桌面版等)只发 Esc
+        try:
+            if self.uia.is_browser(self.target):
+                now = time.time()
+                if now - getattr(self, "_last_back_esc_ts", 0.0) < 1.5:
+                    self._last_back_esc_ts = 0.0
+                    self.uia.combo(["alt", "left"])
+                    return self._status("已返回上一页")
+                self._last_back_esc_ts = now
+                self.uia.press_key("esc")
+                return self._status("已返回（再按一次回上一页）")
+            self.uia.press_key("esc")
+            return self._status("已返回")
+        except Exception:
+            self.uia.press_key("esc")
+            return self._status("已返回")
 
     def _rescan(self) -> dict:
         if self.engine == "dom" and self._dom_active():
